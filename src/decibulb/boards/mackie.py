@@ -97,7 +97,7 @@ class MackieBoard:
         self.port_name = port_name or find_port(profile.port_match)
 
     def read(self) -> Iterator[tuple[mido.Message, ControlEvent | None]]:
-      """Yield every message from the board with its translated event.
+        """Yield every message from the board with its translated event.
 
         Blocks while waiting for input and runs until the caller stops.
 

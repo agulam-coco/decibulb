@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77"]  # 77+ supports SPDX license strings
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decibulb"
+description = "Turn an old mixer into a switch."
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Jason Chigabatia" }]
+requires-python = ">=3.11"
+dynamic = ["version"]  # read from decibulb.__version__
+dependencies = []
+
+[project.scripts]
+decibulb = "decibulb.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "decibulb.__version__" }

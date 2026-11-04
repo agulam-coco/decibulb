@@ -1,0 +1,13 @@
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+
+# Local config 
+config.yaml
+.env

@@ -1,5 +1,5 @@
 # Zoom R24 in audio interface mode (USB > AUDIO I/F).
-# Use aseqdump to verify.
+# Verify with decibulb monitor --raw
 
 name: Zoom R24
 protocol: mackie
@@ -19,16 +19,35 @@ faders:
 
 # MIDI note number of each button.
 buttons:
-  # Status keys above each fader.
-  8: button.1
-  9: button.2
-  10: button.3
-  11: button.4
-  12: button.5
-  13: button.6
-  14: button.7
-  15: button.8
-  # Function keys 
+  # Status keys send a different note in each mode (REC, SOLO, MUTE).
+  0: rec.1
+  1: rec.2
+  2: rec.3
+  3: rec.4
+  4: rec.5
+  5: rec.6
+  6: rec.7
+  7: rec.8
+  8: solo.1
+  9: solo.2
+  10: solo.3
+  11: solo.4
+  12: solo.5
+  13: solo.6
+  14: solo.7
+  15: solo.8
+  16: mute.1
+  17: mute.2
+  18: mute.3
+  19: mute.4
+  20: mute.5
+  21: mute.6
+  22: mute.7
+  23: mute.8
+  # Bank keys (1-8Tr, 9-16Tr).
+  46: bank.left
+  47: bank.right
+  # Function keys.
   54: f1
   55: f2
   56: f3
@@ -40,6 +59,11 @@ buttons:
   93: stop
   94: play
   95: rec
+  # Cursor keys around ENTER.
+  96: up
+  97: down
+  98: left
+  99: right
 
 # Control change number of each relative encoder.
 encoders:

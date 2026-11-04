@@ -52,7 +52,8 @@ def translate(msg: mido.Message, profile: BoardProfile) -> ControlEvent | None:
         profile: Names for the board's controls.
 
     Returns:
-        The matching event, or None if the profile doesn't name the control.
+        The matching event, or None if the profile doesn't name the control
+        or the message carries no change.
     """
     if msg.type == "pitchwheel" and msg.channel in profile.faders:
         value = (msg.pitch - PITCH_MIN) / PITCH_SPAN
@@ -65,6 +66,9 @@ def translate(msg: mido.Message, profile: BoardProfile) -> ControlEvent | None:
     
     if msg.type == "control_change" and msg.control in profile.encoders:
         steps = msg.value if msg.value < ENCODER_SIGN_BIT else -(msg.value - ENCODER_SIGN_BIT)
+        if steps == 0:
+            # The R24 sends zero-step jog messages when switching menus.
+            return None
         return ControlEvent(profile.encoders[msg.control], ControlKind.ENCODER, float(steps))
 
     return None
@@ -93,13 +97,13 @@ class MackieBoard:
         self.port_name = port_name or find_port(profile.port_match)
 
     def read(self) -> Iterator[tuple[mido.Message, ControlEvent | None]]:
-        """Yield every message from the board with its translated event.
+      """Yield every message from the board with its translated event.
 
         Blocks while waiting for input and runs until the caller stops.
 
         Yields:
-            (message, event) pairs. The event is None for controls the
-            profile doesn't name.
+            (message, event) pairs. The event is None when translate()
+            produces no event.
         """
         with mido.open_input(self.port_name) as port:
             for msg in port:

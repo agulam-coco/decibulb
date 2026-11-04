@@ -10,7 +10,11 @@ license = "MIT"
 authors = [{ name = "Jason Chigabatia" }]
 requires-python = ">=3.11"
 dynamic = ["version"]  # read from decibulb.__version__
-dependencies = []
+dependencies = [
+"mido>=1.3",
+"python-rtmidi>=1.5",
+"pyyaml>=6.0",
+]
 
 [project.scripts]
 decibulb = "decibulb.cli:main"

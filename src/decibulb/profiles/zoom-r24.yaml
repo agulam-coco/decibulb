@@ -1,0 +1,42 @@
+# Zoom R24 in audio interface mode (USB > AUDIO I/F).
+# Use aseqdump to verify.
+
+name: Zoom R24
+protocol: mackie
+port_match: R24 MIDI
+
+# MIDI channel of each fader's pitch bend message.
+faders:
+  0: fader.1
+  1: fader.2
+  2: fader.3
+  3: fader.4
+  4: fader.5
+  5: fader.6
+  6: fader.7
+  7: fader.8
+  8: master
+
+# MIDI note number of each button.
+buttons:
+  # Status keys above each fader.
+  8: button.1
+  9: button.2
+  10: button.3
+  11: button.4
+  12: button.5
+  13: button.6
+  14: button.7
+  15: button.8
+  # Function keys (standard Mackie numbering, unverified on the R24).
+  54: f1
+  55: f2
+  56: f3
+  57: f4
+  58: f5
+  # Transport.
+  91: rew
+  92: ff
+  93: stop
+  94: play
+  95: rec

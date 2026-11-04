@@ -24,3 +24,6 @@ where = ["src"]
 
 [tool.setuptools.dynamic]
 version = { attr = "decibulb.__version__" }
+
+[tool.setuptools.package-data]
+decibulb = ["profiles/*.yaml"]

@@ -17,6 +17,7 @@ class ControlKind(Enum):
 
     FADER = "fader"
     BUTTON = "button"
+    ENCODER = "encoder"
 
 
 @dataclass(frozen=True)
@@ -26,8 +27,9 @@ class ControlEvent:
     Attributes:
         control: Control name from the board profile, e.g. "fader.1".
         kind: The type of control.
-        value: Position from 0.0 to 1.0. Buttons use 1.0 for pressed and
-            0.0 for released.
+        value: Depends on kind. Faders: position from 0.0 to 1.0.
+        Buttons: 1.0 pressed, 0.0 released. Encoders: signed step
+        count since the last event (positive is clockwise).
     """
 
     control: str

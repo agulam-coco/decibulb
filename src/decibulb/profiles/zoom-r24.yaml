@@ -28,7 +28,7 @@ buttons:
   13: button.6
   14: button.7
   15: button.8
-  # Function keys (standard Mackie numbering, unverified on the R24).
+  # Function keys 
   54: f1
   55: f2
   56: f3
@@ -40,3 +40,7 @@ buttons:
   93: stop
   94: play
   95: rec
+
+# Control change number of each relative encoder.
+encoders:
+  60: jog

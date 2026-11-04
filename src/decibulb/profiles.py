@@ -29,6 +29,8 @@ class BoardProfile:
         port_match: Text that appears in the board's MIDI port name.
         faders: MIDI channel to fader name.
         buttons: MIDI note number to button name.
+        encoders: MIDI control change number to encoder name.
+
     """
 
     name: str
@@ -36,6 +38,7 @@ class BoardProfile:
     port_match: str
     faders: dict[int, str] = field(default_factory=dict)
     buttons: dict[int, str] = field(default_factory=dict)
+    encoders: dict[int, str] = field(default_factory=dict)
 
 
 def available_profiles() -> list[str]:
@@ -71,4 +74,5 @@ def load_profile(name: str) -> BoardProfile:
         port_match=data["port_match"],
         faders={int(k): v for k, v in data.get("faders", {}).items()},
         buttons={int(k): v for k, v in data.get("buttons", {}).items()},
+        encoders={int(k): v for k, v in data.get("encoders", {}).items()},    
     )

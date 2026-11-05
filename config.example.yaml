@@ -1,0 +1,49 @@
+# decibulb config. Copy this file to config.yaml and edit it.
+# config.yaml is in .gitignore, so your addresses stay off GitHub.
+
+board:
+  profile: zoom-r24          # a file in src/decibulb/profiles/, without .yaml
+  # port: "R24:R24 MIDI 1 24:0"   # only if auto-detect picks the wrong port
+
+# Your lights. Find addresses with: decibulb discover --blink
+# Always put addresses in quotes.
+devices:
+  desk_lamp:
+    type: govee_ble
+    address: "AA:BB:CC:00:00:01"
+  corner_lamp:
+    type: govee_ble
+    address: "AA:BB:CC:00:00:02"
+  wardrobe_lamp:
+    type: govee_ble
+    address: "AA:BB:CC:00:00:03"
+
+# What each control does. Control names come from `decibulb monitor`.
+# Actions: brightness, color, color_temp, toggle_power, master_brightness
+controls:
+  fader.1:
+    action: brightness
+    device: desk_lamp
+  fader.2:
+    action: brightness
+    device: corner_lamp
+  fader.3:
+    action: brightness
+    device: wardrobe_lamp
+  fader.5:
+    action: color
+    device: [desk_lamp, corner_lamp, wardrobe_lamp]
+  fader.6:
+    action: color_temp
+    device: [desk_lamp, corner_lamp, wardrobe_lamp]
+  master:
+    action: master_brightness
+  solo.1:
+    action: toggle_power
+    device: desk_lamp
+  solo.2:
+    action: toggle_power
+    device: corner_lamp
+  solo.3:
+    action: toggle_power
+    device: wardrobe_lamp

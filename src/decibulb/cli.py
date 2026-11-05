@@ -160,14 +160,15 @@ async def _discover(timeout: float, blink: bool) -> int:
     print(f"\nFound {len(lights)} light{'s' if len(lights) != 1 else ''}.")
 
     if blink:
-        for light in lights:
+        for index, light in enumerate(lights):
             print(f"\nBlinking {light.name}...")
             async with GoveeBleBulb(light.name, light.address) as bulb:
                 await bulb.set_power(True)
                 for level in BLINK_LEVELS:
                     await bulb.set_brightness(level)
                     await asyncio.sleep(BLINK_STEP_SECONDS)
-            await asyncio.to_thread(input, "Press Enter for the next light...")
+            if index < len(lights) - 1:
+                await asyncio.to_thread(input, "Press Enter for the next light...")
     return 0
 
 

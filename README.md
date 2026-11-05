@@ -4,31 +4,145 @@ Turn an old mixer into a light switch.
 
 Plug a mixer or MIDI controller into a Raspberry Pi, and its faders control your lights, your speakers, and eventually anything else in your smart home.
 
-> 🚧 Early days. Nothing works yet except `decibulb --version`. Follow along as it gets built.
+> 🚧 Work in progress. Reading a board works today (`decibulb monitor`). Controlling lights is being built now.
 
-## Setup (for now)
+## How it works
+
+```
+board (mixer)  →  event ("fader.1 = 0.62")  →  your config  →  device (bulb, volume)
+```
+
+- **Board plugins** read the hardware and turn every control into the same standard event. Faders become 0.0 to 1.0, buttons become pressed or released, and encoders become +/- steps.
+- **Board profiles** are YAML files that give each control a name, like `fader.1`, `master`, or `play`.
+- **Device plugins** (in progress) send actions to lights and speakers.
+
+Because every board turns into the same events, you can swap mixers or lights without touching the rest of the code.
+
+## Supported hardware
+
+| Type | Hardware | Status |
+|---|---|---|
+| Board | Zoom R24 (Mackie Control) | ✅ All 9 faders, every button, jog wheel |
+| Lights | Govee H6008 (Bluetooth) | 🚧 Control confirmed, plugin in progress |
+
+## Requirements
+
+- A Raspberry Pi running Raspberry Pi OS (tested on a Pi 5)
+- Python 3.11 or newer
+- A Mackie Control board (tested with the Zoom R24)
+- On Python 3.13 or newer, `python-rtmidi` has to compile, so install the build tools first:
+
+  ```bash
+  sudo apt install -y libasound2-dev pkg-config python3-dev build-essential
+  ```
+
+## Install
 
 ```bash
 git clone https://github.com/agulam-coco/decibulb.git
 cd decibulb
-python3 -m venv .venv          # make a private Python for this project
-source .venv/bin/activate      # switch to it (do this in every new terminal)
-pip install -e .               # install decibulb in editable mode
-decibulb --version             # should print: decibulb 0.0.1
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+decibulb --version
 ```
+
+Run `source .venv/bin/activate` again in every new terminal.
+
+## Usage
+
+### Watch your board
+
+```bash
+decibulb monitor
+```
+
+Move faders, press buttons, and spin knobs to see live events:
+
+```
+Listening to Zoom R24 on R24:R24 MIDI 1 24:0. Press Ctrl+C to stop.
+fader.1    ████████████░░░░░░░░ 0.62
+master     ████████████████████ 1.00
+play       pressed
+play       released
+jog        → +1
+```
+
+| Option | What it does |
+|---|---|
+| `--profile NAME` | Board profile to use (default: `zoom-r24`) |
+| `--port PORT` | Exact MIDI port name, if auto-detect picks the wrong one |
+| `--raw` | Show the raw MIDI message next to each event |
+
+Lines marked `skipped` are messages that didn't produce an event, either because the profile doesn't name that control yet or because the message carried no change.
+
+## Hardware notes
+
+### Zoom R24
+
+- **Interface mode:** press USB, select AUDIO I/F, then EXECUTE. The board shows up as `R24 MIDI 1`.
+- **Power:** the R24 can run on USB power alone in interface mode, but a Pi 5 limits USB current unless it's on a 5A supply. If `dmesg` shows repeated `over-current change` lines:
+  - If your Pi has an official 27W supply or a PoE+ HAT rated 4.5A or more, add `usb_max_current_enable=1` to the bottom of `/boot/firmware/config.txt` and reboot.
+  - Otherwise, use a powered USB hub or the Zoom AD-14 adapter (5V DC, 1A, center positive).
+- **Status keys** send a different note in REC, SOLO, and MUTE mode, so they show up as `rec.1` to `rec.8`, `solo.1` to `solo.8`, and `mute.1` to `mute.8`.
+- The R24 sends empty jog wheel messages when you switch menus (RHYTHM, EFFECT, USB). decibulb ignores them.
+
+### Govee H6008 bulbs
+
+- These bulbs don't support Govee's LAN API (no LAN Control toggle in the app, and they don't answer LAN scans). Govee's cloud API is limited to about 10 requests per bulb per minute, which is too slow for a fader. decibulb controls them over **Bluetooth** instead, using [govee-ble-local](https://pypi.org/project/govee-ble-local/).
+- A bulb usually accepts only one Bluetooth connection. Turn off Bluetooth on your phone if the Pi can't find a bulb.
+- Avoid power cycling them quickly. The H6008 reportedly factory-resets after four quick power cycles in a row.
+
+## Adding your board
+
+If your board speaks Mackie Control, you can add it without writing code:
+
+1. Run `decibulb monitor --raw` and move every control. Write down the channel or note each one sends.
+2. Copy `src/decibulb/profiles/zoom-r24.yaml` to `src/decibulb/profiles/<your-board>.yaml` and fill in your numbers.
+3. Run `decibulb monitor --profile <your-board>` to check it.
+4. Run `pytest`. Every profile is checked automatically.
+
+Support for plain MIDI CC controllers (Korg nanoKONTROL, Akai MIDImix, and similar) is planned.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+The tests use real MIDI values captured from a Zoom R24, so no hardware is needed to run them.
 
 ## Project layout
 
 ```
 decibulb/
-├── pyproject.toml          how to install the project, and what command it creates
-├── README.md               this file
-├── LICENSE                 MIT
-├── .gitignore              files git should never track
-└── src/decibulb/
-    ├── __init__.py         marks the package, holds the version number
-    └── cli.py              the `decibulb` terminal command
+├── pyproject.toml              install settings, dependencies, the decibulb command
+├── README.md
+├── LICENSE
+├── src/decibulb/
+│   ├── __init__.py             package version
+│   ├── cli.py                  the decibulb command
+│   ├── events.py               the standard ControlEvent every board produces
+│   ├── profiles.py             loads board profiles
+│   ├── profiles/
+│   │   └── zoom-r24.yaml       control names for the Zoom R24
+│   └── boards/
+│       └── mackie.py           reads Mackie Control boards
+└── tests/
+    ├── test_cli.py
+    ├── test_mackie.py
+    └── test_profiles.py
 ```
+
+## Roadmap
+
+- [x] Read the Zoom R24 over Mackie Control
+- [x] `decibulb monitor`
+- [ ] Govee Bluetooth device plugin
+- [ ] Config file and `decibulb run`: faders control lights
+- [ ] Room volume: Alexa plays through the Pi, one fader sets the volume
+- [ ] Home Assistant and MQTT devices, plain MIDI CC boards
 
 ## License
 

@@ -19,7 +19,14 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak.exc import BleakError
 from govee_ble_local import Device as GoveeDevice
-from govee_ble_local import DiscoveredDevice, GoveeBleError, create_device, discover, match
+from govee_ble_local import (
+    DiscoveredDevice,
+    GoveeBleConnectionError,
+    GoveeBleError,
+    create_device,
+    discover,
+    match,
+)
 
 from decibulb.devices.base import Capability, Device
 
@@ -42,8 +49,8 @@ async def discover_bulbs(timeout: float = DEFAULT_SCAN_TIMEOUT) -> list[Discover
     """
     try:
         return await discover(timeout=timeout)
-    except BleakError as err:
-        raise OSError(f"Bluetooth is unavailable: {err}") from err
+    except GoveeBleConnectionError as err:
+        raise _bluetooth_unavailable(err) from err
 
 
 def brightness_to_percent(level: float) -> int:
@@ -76,8 +83,16 @@ async def _find(address: str, timeout: float) -> DiscoveredDevice | None:
     try:
         await BleakScanner.find_device_by_filter(is_target, timeout=timeout)
     except BleakError as err:
-        raise OSError(f"Bluetooth is unavailable: {err}") from err
+        raise _bluetooth_unavailable(err) from err
     return found
+
+
+def _bluetooth_unavailable(err: Exception) -> OSError:
+    """Build a readable error from a Bluetooth adapter failure."""
+    # The library wraps bleak's error; bleak's own first argument is the clean message.
+    cause = err.__cause__ or err
+    reason = cause.args[0] if cause.args else cause
+    return OSError(f"Bluetooth is unavailable: {reason}")
 
 
 class GoveeBleBulb(Device):

@@ -3,25 +3,32 @@
 Usage:
     decibulb [--version] [--help]
     decibulb monitor [--profile NAME] [--port PORT] [--raw]
+    decibulb discover [--timeout SECONDS] [--blink]
 
 Functions:
     build_parser: Build the top-level argument parser.
     format_event: Render a ControlEvent as one line of text.
     cmd_monitor: Print live events from a board.
+    cmd_discover: List nearby lights and optionally blink each one.
     main: Run the CLI.
 """
 
 import argparse
+import asyncio
 import sys
 
 from decibulb import __version__
 from decibulb.boards.mackie import MackieBoard
+from decibulb.devices.govee_ble import GoveeBleBulb, discover_bulbs
 from decibulb.events import ControlEvent, ControlKind
 from decibulb.profiles import load_profile
 
 DEFAULT_PROFILE = "zoom-r24"
+DEFAULT_SCAN_SECONDS = 10.0
 BAR_WIDTH = 20
 NAME_WIDTH = 10
+BLINK_LEVELS = (1.0, 0.1, 1.0, 0.1, 1.0)
+BLINK_STEP_SECONDS = 0.4
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(
         prog="decibulb",
-        description="Turn an old mixer into a switch.",
+        description="Turn an old mixer into a light switch.",
     )
     parser.add_argument(
         "--version",
@@ -51,6 +58,20 @@ def build_parser() -> argparse.ArgumentParser:
     monitor.add_argument("--port", help="exact MIDI port name (default: auto-detect)")
     monitor.add_argument("--raw", action="store_true", help="also show raw MIDI messages")
     monitor.set_defaults(func=cmd_monitor)
+
+    discover = commands.add_parser("discover", help="find nearby lights")
+    discover.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_SCAN_SECONDS,
+        help=f"seconds to scan (default: {DEFAULT_SCAN_SECONDS:g})",
+    )
+    discover.add_argument(
+        "--blink",
+        action="store_true",
+        help="blink each light one at a time so you can tell which is which",
+    )
+    discover.set_defaults(func=cmd_discover)
 
     return parser
 
@@ -101,6 +122,52 @@ def cmd_monitor(args: argparse.Namespace) -> int:
                 print(format_event(event))
     except KeyboardInterrupt:
         print()
+    return 0
+
+
+def cmd_discover(args: argparse.Namespace) -> int:
+    """List nearby lights, then optionally blink each one.
+
+    Args:
+        args: Parsed arguments with `timeout` and `blink`.
+
+    Returns:
+        Exit code.
+
+    Raises:
+        OSError: If Bluetooth is unavailable.
+    """
+    try:
+        return asyncio.run(_discover(args.timeout, args.blink))
+    except KeyboardInterrupt:
+        print()
+        return 0
+
+
+async def _discover(timeout: float, blink: bool) -> int:
+    """Scan, print a table of lights, and blink them if asked."""
+    print(f"Scanning for Govee lights for {timeout:g} seconds...")
+    lights = sorted(await discover_bulbs(timeout), key=lambda light: light.name)
+
+    if not lights:
+        print("No lights found. Check that they're powered on and not connected to a phone.")
+        return 0
+
+    print(f"\n{'MODEL':<8}{'ADDRESS':<20}{'NAME':<24}SIGNAL")
+    for light in lights:
+        signal = f"{light.rssi} dBm" if light.rssi is not None else "?"
+        print(f"{light.sku:<8}{light.address:<20}{light.name:<24}{signal}")
+    print(f"\nFound {len(lights)} light{'s' if len(lights) != 1 else ''}.")
+
+    if blink:
+        for light in lights:
+            print(f"\nBlinking {light.name}...")
+            async with GoveeBleBulb(light.name, light.address) as bulb:
+                await bulb.set_power(True)
+                for level in BLINK_LEVELS:
+                    await bulb.set_brightness(level)
+                    await asyncio.sleep(BLINK_STEP_SECONDS)
+            await asyncio.to_thread(input, "Press Enter for the next light...")
     return 0
 
 

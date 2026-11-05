@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from bleak.exc import BleakError
 from govee_ble_local import Device as GoveeDevice
 from govee_ble_local import DiscoveredDevice, GoveeBleError, create_device, discover, match
 
@@ -35,8 +36,14 @@ async def discover_bulbs(timeout: float = DEFAULT_SCAN_TIMEOUT) -> list[Discover
 
     Returns:
         Supported lights found during the scan.
+
+    Raises:
+        OSError: If Bluetooth is unavailable.
     """
-    return await discover(timeout=timeout)
+    try:
+        return await discover(timeout=timeout)
+    except BleakError as err:
+        raise OSError(f"Bluetooth is unavailable: {err}") from err
 
 
 def brightness_to_percent(level: float) -> int:
@@ -52,7 +59,11 @@ def brightness_to_percent(level: float) -> int:
 
 
 async def _find(address: str, timeout: float) -> DiscoveredDevice | None:
-    """Scan until the Govee light at `address` is seen, or time out."""
+    """Scan until the Govee light at `address` is seen, or time out.
+
+    Raises:
+        OSError: If Bluetooth is unavailable.
+    """
     found: DiscoveredDevice | None = None
 
     def is_target(ble_device: BLEDevice, advertisement: AdvertisementData) -> bool:
@@ -62,7 +73,10 @@ async def _find(address: str, timeout: float) -> DiscoveredDevice | None:
         found = match(ble_device, advertisement)
         return found is not None
 
-    await BleakScanner.find_device_by_filter(is_target, timeout=timeout)
+    try:
+        await BleakScanner.find_device_by_filter(is_target, timeout=timeout)
+    except BleakError as err:
+        raise OSError(f"Bluetooth is unavailable: {err}") from err
     return found
 
 

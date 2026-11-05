@@ -76,6 +76,34 @@ jog        → +1
 
 Lines marked `skipped` are messages that didn't produce an event, either because the profile doesn't name that control yet or because the message carried no change.
 
+### Find your lights
+
+```bash
+decibulb discover
+```
+
+Scans over Bluetooth and lists every Govee light nearby:
+
+```
+Scanning for Govee lights for 10 seconds...
+
+MODEL   ADDRESS             NAME                    SIGNAL
+H6008   AA:BB:CC:00:00:01   ihoment_H6008_0001      -40 dBm
+H6008   AA:BB:CC:00:00:02   ihoment_H6008_0002      -52 dBm
+H6008   AA:BB:CC:00:00:03   ihoment_H6008_0003      -55 dBm
+
+Found 3 lights.
+```
+
+The names don't tell you which lamp is which, so add `--blink`. Each light flashes one at a time, and you press Enter to move to the next one. Write down which address is which lamp, since you'll need them for your config.
+
+| Option | What it does |
+|---|---|
+| `--timeout SECONDS` | How long to scan (default: 10) |
+| `--blink` | Flash each light one at a time |
+
+**SIGNAL** is Bluetooth strength. Closer to 0 is stronger. Anything above about -70 dBm is solid. If a light is weaker than about -80 dBm, move the Pi closer or expect it to lag.
+
 ## Hardware notes
 
 ### Zoom R24
@@ -90,6 +118,7 @@ Lines marked `skipped` are messages that didn't produce an event, either because
 ### Govee H6008 bulbs
 
 - These bulbs don't support Govee's LAN API (no LAN Control toggle in the app, and they don't answer LAN scans). Govee's cloud API is limited to about 10 requests per bulb per minute, which is too slow for a fader. decibulb controls them over **Bluetooth** instead, using [govee-ble-local](https://pypi.org/project/govee-ble-local/).
+- Find your bulbs' addresses with `decibulb discover --blink`.
 - A bulb usually accepts only one Bluetooth connection. Turn off Bluetooth on your phone if the Pi can't find a bulb.
 - decibulb keeps the Bluetooth connection open the whole time it runs, so there's no reconnect delay when you grab a fader after a pause.
 - Each bulb takes about **10 updates per second** over Bluetooth. Fast enough for a fader, as long as decibulb only sends the latest value instead of every tiny step.
@@ -149,7 +178,7 @@ decibulb/
 - [x] Read the Zoom R24 over Mackie Control
 - [x] `decibulb monitor`
 - [x] Govee Bluetooth device plugin
-- [ ] `decibulb discover`: find bulbs on the command line
+- [x] `decibulb discover`: find lights and blink them to tell which is which
 - [ ] Config file and `decibulb run`: faders control lights
 - [ ] Room volume: Alexa plays through the Pi, one fader sets the volume
 - [ ] Home Assistant and MQTT devices, plain MIDI CC boards

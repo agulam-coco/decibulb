@@ -11,6 +11,8 @@ authors = [{ name = "Jason Chigabatia" }]
 requires-python = ">=3.11"
 dynamic = ["version"]  # read from decibulb.__version__
 dependencies = [
+    "bleak>=3.0",
+    "govee-ble-local>=1.10",
     "mido>=1.3",
     "python-rtmidi>=1.5",
     "pyyaml>=6.0",

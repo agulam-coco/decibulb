@@ -11,11 +11,14 @@ Classes:
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 from decibulb.devices.base import Capability, Device, UnsupportedActionError
 
 logger = logging.getLogger(__name__)
+
+_Pending = tuple[Any, float]  # (value, time.monotonic() when submitted)
 
 _SETTERS = {
     Capability.POWER: "set_power",
@@ -44,7 +47,7 @@ class DeviceQueue:
                 before run() sends anything.
         """
         self.device = device
-        self._pending: dict[Capability, Any] = {}
+        self._pending: dict[Capability, _Pending] = {}
         self._wake = asyncio.Event()
         self._idle = asyncio.Event()
         self._idle.set()
@@ -56,7 +59,7 @@ class DeviceQueue:
             capability: Kind of command, e.g. Capability.BRIGHTNESS.
             value: Argument for the matching Device.set_* method.
         """
-        self._pending[capability] = value
+        self._pending[capability] = (value, time.monotonic())
         self._idle.clear()
         self._wake.set()
 
@@ -74,19 +77,29 @@ class DeviceQueue:
             self._wake.clear()
             while self._pending:
                 batch, self._pending = self._pending, {}
-                for capability, value in _in_send_order(batch):
-                    await self._send(capability, value)
+                for capability, (value, submitted) in _in_send_order(batch):
+                    await self._send(capability, value, submitted)
             self._idle.set()
 
-    async def _send(self, capability: Capability, value: Any) -> None:
+    async def _send(self, capability: Capability, value: Any, submitted: float) -> None:
         """Send one command, logging failures instead of raising them."""
+        started = time.monotonic()
         try:
             await getattr(self.device, _SETTERS[capability])(value)
         except (ConnectionError, UnsupportedActionError) as err:
             logger.warning("%s: %s", self.device.name, err)
+            return
+        finished = time.monotonic()
+        logger.debug(
+            "%s %s: sent in %.0f ms, %.0f ms after the control moved",
+            self.device.name,
+            capability.value,
+            (finished - started) * 1000,
+            (finished - submitted) * 1000,
+        )
 
 
-def _in_send_order(batch: dict[Capability, Any]) -> list[tuple[Capability, Any]]:
+def _in_send_order(batch: dict[Capability, _Pending]) -> list[tuple[Capability, _Pending]]:
     """Order a batch so power-on goes first and power-off goes last.
 
     Otherwise a brightness change sent after power-off could turn the light
@@ -94,8 +107,8 @@ def _in_send_order(batch: dict[Capability, Any]) -> list[tuple[Capability, Any]]
     """
     power = batch.pop(Capability.POWER, None)
     commands = list(batch.items())
-    if power is True:
-        commands.insert(0, (Capability.POWER, True))
-    elif power is False:
-        commands.append((Capability.POWER, False))
+    if power is not None and power[0]:
+        commands.insert(0, (Capability.POWER, power))
+    elif power is not None:
+        commands.append((Capability.POWER, power))
     return commands

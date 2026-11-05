@@ -4,6 +4,7 @@ Classes:
     Engine: Applies the user's config to each ControlEvent.
 
 Functions:
+    apply_curve: Map a fader position to a brightness level.
     hue_to_rgb: Convert a 0.0 to 1.0 hue to a fully saturated RGB color.
     level_to_kelvin: Convert a 0.0 to 1.0 level to a color temperature.
 """
@@ -11,7 +12,7 @@ Functions:
 import colorsys
 import logging
 
-from decibulb.config import Action, ControlMapping
+from decibulb.config import Action, ControlMapping, Curve
 from decibulb.devices.base import Capability
 from decibulb.events import ControlEvent, ControlKind
 from decibulb.throttle import DeviceQueue
@@ -20,6 +21,23 @@ logger = logging.getLogger(__name__)
 
 WARMEST_KELVIN = 2700
 COOLEST_KELVIN = 6500
+PERCEPTUAL_EXPONENT = 2.0  # eyes see brightness roughly as the square of light output
+
+
+def apply_curve(position: float, curve: Curve) -> float:
+    """Map a fader position to a brightness level.
+
+    Args:
+        position: Fader position from 0.0 to 1.0.
+        curve: PERCEPTUAL gives finer control at the dim end, where eyes
+            notice small changes most. LINEAR returns the position as is.
+
+    Returns:
+        Brightness from 0.0 to 1.0.
+    """
+    if curve is Curve.LINEAR:
+        return position
+    return position**PERCEPTUAL_EXPONENT
 
 
 def hue_to_rgb(hue: float) -> tuple[int, int, int]:
@@ -59,15 +77,22 @@ class Engine:
         master: Current master brightness, from 0.0 to 1.0.
     """
 
-    def __init__(self, controls: dict[str, ControlMapping], queues: dict[str, DeviceQueue]) -> None:
+    def __init__(
+        self,
+        controls: dict[str, ControlMapping],
+        queues: dict[str, DeviceQueue],
+        curve: Curve = Curve.PERCEPTUAL,
+    ) -> None:
         """Create an engine.
 
         Args:
             controls: Control mappings from the config, by control name.
             queues: A running DeviceQueue for each connected device, by name.
+            curve: How fader position maps to brightness.
         """
         self._controls = controls
         self._queues = queues
+        self._curve = curve
         self.master = 1.0
         self._levels = {name: 1.0 for name in queues}
         self._power = {name: True for name in queues}
@@ -115,14 +140,18 @@ class Engine:
         if not self._power[name]:
             self._power[name] = True
             self._submit(name, Capability.POWER, True)
-        self._submit(name, Capability.BRIGHTNESS, level * self.master)
+        self._submit(name, Capability.BRIGHTNESS, self._brightness(name))
 
     def _set_master(self, master: float) -> None:
         """Rescale every light that's on."""
         self.master = master
-        for name, level in self._levels.items():
+        for name in self._levels:
             if self._power[name]:
-                self._submit(name, Capability.BRIGHTNESS, level * master)
+                self._submit(name, Capability.BRIGHTNESS, self._brightness(name))
+
+    def _brightness(self, name: str) -> float:
+        """Return a device's brightness from its fader level and the master."""
+        return apply_curve(self._levels[name] * self.master, self._curve)
 
     def _toggle(self, names: list[str]) -> None:
         """Turn the devices off if any are on, otherwise turn them all on."""

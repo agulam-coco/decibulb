@@ -93,8 +93,8 @@ async def run(config: Config, profile: BoardProfile, board: Board) -> None:
     connected = await _connect_all(devices)
     queues = {name: DeviceQueue(device) for name, device in connected.items()}
     workers = [asyncio.create_task(queue.run()) for queue in queues.values()]
-    engine = Engine(config.controls, queues)
-
+    engine = Engine(config.controls, queues, config.brightness_curve)
+    
     print(f"Ready: {len(connected)} of {len(devices)} devices connected. Press Ctrl+C to stop.")
     try:
         async for _msg, event in board.listen():

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from decibulb.config import Action, ConfigError, load_config
+from decibulb.config import Action, ConfigError, Curve, load_config
 
 EXAMPLE_CONFIG = Path(__file__).parents[1] / "config.example.yaml"
 
@@ -48,6 +48,7 @@ def test_minimal_config(write_config):
     assert config.devices["desk_lamp"].options == {"address": "AA:BB:CC:00:00:01"}
     mapping = config.controls["fader.1"]
     assert (mapping.action, mapping.devices) == (Action.BRIGHTNESS, ("desk_lamp",))
+    assert config.brightness_curve is Curve.PERCEPTUAL
 
 
 def test_missing_file(tmp_path):
@@ -101,3 +102,13 @@ def test_master_brightness_takes_no_device(write_config):
     text = MINIMAL.replace("action: brightness", "action: master_brightness")
     with pytest.raises(ConfigError, match="applies to every device"):
         load_config(write_config(text))
+
+
+def test_linear_brightness_curve(write_config):
+    config = load_config(write_config("brightness_curve: linear\n" + MINIMAL))
+    assert config.brightness_curve is Curve.LINEAR
+
+
+def test_unknown_brightness_curve(write_config):
+    with pytest.raises(ConfigError, match="brightness_curve must be perceptual or linear"):
+        load_config(write_config("brightness_curve: log\n" + MINIMAL))

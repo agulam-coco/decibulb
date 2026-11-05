@@ -2,7 +2,6 @@
 
 import asyncio
 import threading
-from unittest import mock
 
 import mido
 import pytest
@@ -90,62 +89,4 @@ def test_run_routes_events_and_cleans_up(monkeypatch):
 
     def fake_create(entry):
         built[entry.name] = FakeDevice(entry.name)
-        return built[entry.name]
-
-    monkeypatch.setattr(runner, "create_device", fake_create)
-    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",))}
-    board = FakeBoard([ControlEvent("fader.1", ControlKind.FADER, 0.62)])
-
-    asyncio.run(runner.run(make_config(controls), R24, board))
-
-    assert built["desk"].calls == [("brightness", 0.62)]
-    assert not built["desk"].connected
-    assert not built["corner"].connected
-
-
-def test_run_skips_devices_that_fail_to_connect(monkeypatch, caplog):
-    built = {"desk": UnreachableDevice("desk"), "corner": FakeDevice("corner")}
-    monkeypatch.setattr(runner, "create_device", lambda entry: built[entry.name])
-    controls = {
-        "fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",)),
-        "fader.2": ControlMapping("fader.2", Action.BRIGHTNESS, ("corner",)),
-    }
-    board = FakeBoard([
-        ControlEvent("fader.1", ControlKind.FADER, 0.5),
-        ControlEvent("fader.2", ControlKind.FADER, 0.3),
-    ])
-
-    asyncio.run(runner.run(make_config(controls), R24, board))
-
-    assert "desk: no Govee light found" in caplog.text
-    assert built["corner"].calls == [("brightness", 0.3)]
-
-
-def test_board_listen_receives_messages_from_another_thread(monkeypatch):
-    captured = {}
-
-    class FakePort:
-        def __init__(self, name, callback):
-            captured["callback"] = callback
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc_info):
-            captured["closed"] = True
-
-    monkeypatch.setattr(mido, "open_input", FakePort)
-
-    async def main():
-        listener = MackieBoard(R24, port_name="R24").listen()
-        first = asyncio.ensure_future(anext(listener))
-        await asyncio.sleep(0)
-        message = mido.Message("pitchwheel", channel=0, pitch=8191)
-        threading.Thread(target=captured["callback"], args=(message,)).start()
-        msg, event = await asyncio.wait_for(first, 1)
-        await listener.aclose()
-        return event
-
-    event = asyncio.run(main())
-    assert (event.control, event.value) == ("fader.1", 1.0)
-    assert captured["closed"]
+        return

@@ -111,3 +111,16 @@ def test_errors_are_logged_and_the_queue_keeps_going(caplog):
         run_queue(lamp, scenario)
     assert "lamp: link lost" in caplog.text
     assert lamp.calls == [("color", (0, 0, 255))]
+    
+
+
+def test_send_timing_is_logged_at_debug_level(caplog):
+    lamp = SlowDevice("lamp")
+
+    async def scenario(queue):
+        queue.submit(Capability.BRIGHTNESS, 0.5)
+
+    with caplog.at_level(logging.DEBUG, logger="decibulb.throttle"):
+        run_queue(lamp, scenario)
+    assert "lamp brightness: sent in 10" in caplog.text
+    assert "ms after the control moved" in caplog.text

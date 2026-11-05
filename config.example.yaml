@@ -5,6 +5,11 @@ board:
   profile: zoom-r24          # a file in src/decibulb/profiles/, without .yaml
   # port: "R24:R24 MIDI 1 24:0"   # only if auto-detect picks the wrong port
 
+# How fader position maps to brightness:
+#   perceptual (default): finer control at the dim end, like a real dimmer
+#   linear: fader position is the brightness, e.g. halfway = 50%
+brightness_curve: perceptual
+
 # Your lights. Find addresses with: decibulb discover --blink
 # Always put addresses in quotes.
 devices:

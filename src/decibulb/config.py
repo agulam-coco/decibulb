@@ -5,6 +5,7 @@ The config is a YAML file, config.yaml by default. See config.example.yaml.
 Classes:
     ConfigError: Raised when the config is missing or invalid.
     Action: What a control does.
+    Curve: How fader position maps to brightness.
     DeviceConfig: One entry under `devices:`.
     ControlMapping: One entry under `controls:`.
     Config: A parsed and validated config file.
@@ -35,6 +36,13 @@ class Action(Enum):
     COLOR_TEMP = "color_temp"
     TOGGLE_POWER = "toggle_power"
     MASTER_BRIGHTNESS = "master_brightness"
+
+
+class Curve(Enum):
+    """How fader position maps to brightness."""
+
+    PERCEPTUAL = "perceptual"
+    LINEAR = "linear"
 
 
 # Actions that apply to every device, so they don't take a `device:`.
@@ -80,12 +88,14 @@ class Config:
         port: Exact MIDI port name, or None to auto-detect.
         devices: Device entries by name.
         controls: Control mappings by control name.
+        brightness_curve: How fader position maps to brightness.
     """
 
     profile: str
     port: str | None
     devices: dict[str, DeviceConfig]
     controls: dict[str, ControlMapping]
+    brightness_curve: Curve = Curve.PERCEPTUAL
 
 
 def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
@@ -117,9 +127,14 @@ def load_config(path: Path = DEFAULT_CONFIG_PATH) -> Config:
     if "profile" not in board:
         raise ConfigError("board.profile is required, e.g. profile: zoom-r24")
 
+    try:
+        curve = Curve(data.get("brightness_curve", Curve.PERCEPTUAL.value))
+    except ValueError:
+        raise ConfigError("brightness_curve must be perceptual or linear") from None
+
     devices = _parse_devices(_mapping(data.get("devices"), "devices"))
     controls = _parse_controls(_mapping(data.get("controls"), "controls"), devices)
-    return Config(board["profile"], board.get("port"), devices, controls)
+    return Config(board["profile"], board.get("port"), devices, controls, curve)
 
 
 def _mapping(value: Any, where: str) -> dict[str, Any]:

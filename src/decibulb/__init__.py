@@ -7,6 +7,7 @@ Modules:
     devices: Device plugins that control lights and speakers.
     events: Board-independent control events.
     profiles: Board profiles that name each control.
+    throttle: Sends only the newest command to each device.
 """
 
 __version__ = "0.0.1"

@@ -144,7 +144,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The tests use real MIDI values captured from a Zoom R24, so no hardware is needed to run them.
+The tests use real MIDI values captured from a Zoom R24 and a mocked Bluetooth library, so no hardware is needed to run them.
 
 ## Project layout
 
@@ -169,6 +169,7 @@ decibulb/
 └── tests/
     ├── test_cli.py
     ├── test_devices.py
+    ├── test_govee_ble.py
     ├── test_mackie.py
     └── test_profiles.py
 ```

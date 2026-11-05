@@ -4,7 +4,7 @@ Turn an old mixer into a light switch.
 
 Plug a mixer or MIDI controller into a Raspberry Pi, and its faders control your lights, your speakers, and eventually anything else in your smart home.
 
-> 🚧 Work in progress. Reading a board works today (`decibulb monitor`). Controlling lights is being built now.
+> 🚧 Work in progress. Reading a board works (`decibulb monitor`) and the Govee bulb plugin works. Connecting faders to lights is next.
 
 ## How it works
 
@@ -14,7 +14,7 @@ board (mixer)  →  event ("fader.1 = 0.62")  →  your config  →  device (bul
 
 - **Board plugins** read the hardware and turn every control into the same standard event. Faders become 0.0 to 1.0, buttons become pressed or released, and encoders become +/- steps.
 - **Board profiles** are YAML files that give each control a name, like `fader.1`, `master`, or `play`.
-- **Device plugins** (in progress) send actions to lights and speakers.
+- **Device plugins** send actions like "brightness 0.62" to lights and speakers. Every device accepts the same commands, so the code that connects faders to lights never needs to know what brand of bulb it is.
 
 Because every board turns into the same events, you can swap mixers or lights without touching the rest of the code.
 
@@ -23,7 +23,7 @@ Because every board turns into the same events, you can swap mixers or lights wi
 | Type | Hardware | Status |
 |---|---|---|
 | Board | Zoom R24 (Mackie Control) | ✅ All 9 faders, every button, jog wheel |
-| Lights | Govee H6008 (Bluetooth) | 🚧 Control confirmed, plugin in progress |
+| Lights | Govee H6008 (Bluetooth) | ✅ Power, brightness, color, color temperature |
 
 ## Requirements
 
@@ -91,6 +91,10 @@ Lines marked `skipped` are messages that didn't produce an event, either because
 
 - These bulbs don't support Govee's LAN API (no LAN Control toggle in the app, and they don't answer LAN scans). Govee's cloud API is limited to about 10 requests per bulb per minute, which is too slow for a fader. decibulb controls them over **Bluetooth** instead, using [govee-ble-local](https://pypi.org/project/govee-ble-local/).
 - A bulb usually accepts only one Bluetooth connection. Turn off Bluetooth on your phone if the Pi can't find a bulb.
+- decibulb keeps the Bluetooth connection open the whole time it runs, so there's no reconnect delay when you grab a fader after a pause.
+- Each bulb takes about **10 updates per second** over Bluetooth. Fast enough for a fader, as long as decibulb only sends the latest value instead of every tiny step.
+- The dimmest setting is 1%. Govee bulbs can't go to 0% brightness, so "off" is a separate power command.
+- Color temperature ranges from 2700K (warm) to 6500K (cool). Values outside that are clamped.
 - Avoid power cycling them quickly. The H6008 reportedly factory-resets after four quick power cycles in a row.
 
 ## Adding your board
@@ -127,10 +131,15 @@ decibulb/
 │   ├── profiles.py             loads board profiles
 │   ├── profiles/
 │   │   └── zoom-r24.yaml       control names for the Zoom R24
-│   └── boards/
-│       └── mackie.py           reads Mackie Control boards
+│   ├── boards/
+│   │   └── mackie.py           reads Mackie Control boards
+│   └── devices/
+│       ├── base.py             the Device base class every device plugin follows
+│       ├── fake.py             a pretend device for tests and demo mode
+│       └── govee_ble.py        Govee lights over Bluetooth
 └── tests/
     ├── test_cli.py
+    ├── test_devices.py
     ├── test_mackie.py
     └── test_profiles.py
 ```
@@ -139,7 +148,8 @@ decibulb/
 
 - [x] Read the Zoom R24 over Mackie Control
 - [x] `decibulb monitor`
-- [ ] Govee Bluetooth device plugin
+- [x] Govee Bluetooth device plugin
+- [ ] `decibulb discover`: find bulbs on the command line
 - [ ] Config file and `decibulb run`: faders control lights
 - [ ] Room volume: Alexa plays through the Pi, one fader sets the volume
 - [ ] Home Assistant and MQTT devices, plain MIDI CC boards

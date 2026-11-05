@@ -5,6 +5,7 @@ Modules:
     cli: Command-line entry point.
     config: User configuration file.
     devices: Device plugins that control lights and speakers.
+    engine: Turns control events into device commands.
     events: Board-independent control events.
     profiles: Board profiles that name each control.
     throttle: Sends only the newest command to each device.

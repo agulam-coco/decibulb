@@ -4,21 +4,26 @@ Usage:
     decibulb [--version] [--help]
     decibulb monitor [--profile NAME] [--port PORT] [--raw]
     decibulb discover [--timeout SECONDS] [--blink]
+    decibulb run [--config PATH] [--verbose]
 
 Functions:
     build_parser: Build the top-level argument parser.
     format_event: Render a ControlEvent as one line of text.
     cmd_monitor: Print live events from a board.
     cmd_discover: List nearby lights and optionally blink each one.
+    cmd_run: Control devices from a board using the config file.
     main: Run the CLI.
 """
 
 import argparse
 import asyncio
+import logging
 import sys
+from pathlib import Path
 
-from decibulb import __version__
+from decibulb import __version__, runner
 from decibulb.boards.mackie import MackieBoard
+from decibulb.config import DEFAULT_CONFIG_PATH, ConfigError, load_config
 from decibulb.devices.govee_ble import GoveeBleBulb, discover_bulbs
 from decibulb.events import ControlEvent, ControlKind
 from decibulb.profiles import load_profile
@@ -72,6 +77,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="blink each light one at a time so you can tell which is which",
     )
     discover.set_defaults(func=cmd_discover)
+
+    run = commands.add_parser("run", help="control your devices from the board")
+    run.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help=f"config file (default: {DEFAULT_CONFIG_PATH})",
+    )
+    run.add_argument("--verbose", action="store_true", help="show debug messages")
+    run.set_defaults(func=cmd_run)
 
     return parser
 
@@ -172,6 +187,34 @@ async def _discover(timeout: float, blink: bool) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """Control devices from a board until interrupted.
+
+    Args:
+        args: Parsed arguments with `config` and `verbose`.
+
+    Returns:
+        Exit code.
+
+    Raises:
+        ConfigError: If the config is missing or invalid.
+        OSError: If the board or Bluetooth is unavailable.
+    """
+    if args.verbose:
+        logging.getLogger("decibulb").setLevel(logging.DEBUG)
+
+    config = load_config(args.config)
+    profile = load_profile(config.profile)
+    board = MackieBoard(profile, config.port)
+    print(f"Listening to {profile.name} on {board.port_name}.")
+
+    try:
+        asyncio.run(runner.run(config, profile, board))
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the decibulb CLI.
 
@@ -181,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     Returns:
         Exit code: 0 on success, 1 on error.
     """
+    logging.basicConfig(format="%(levelname)s: %(message)s")
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -190,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return args.func(args)
-    except OSError as err:
+    except (ConfigError, OSError) as err:
         print(f"decibulb: {err}", file=sys.stderr)
         return 1
 

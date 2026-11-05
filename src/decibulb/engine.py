@@ -52,7 +52,8 @@ class Engine:
 
     The engine remembers each device's fader level and power state, so the
     master fader can scale every light and buttons can toggle. Lights are
-    assumed to be on at startup.
+    assumed to be on at startup. Devices without a queue, such as ones that
+    failed to connect, are skipped.
 
     Attributes:
         master: Current master brightness, from 0.0 to 1.0.
@@ -63,7 +64,7 @@ class Engine:
 
         Args:
             controls: Control mappings from the config, by control name.
-            queues: A running DeviceQueue for each device, by device name.
+            queues: A running DeviceQueue for each connected device, by name.
         """
         self._controls = controls
         self._queues = queues
@@ -84,9 +85,11 @@ class Engine:
         if mapping is None:
             return
 
+        names = [name for name in mapping.devices if name in self._queues]
+
         if mapping.action is Action.TOGGLE_POWER:
-            if event.kind is ControlKind.BUTTON and event.pressed:
-                self._toggle(mapping.devices)
+            if event.kind is ControlKind.BUTTON and event.pressed and names:
+                self._toggle(names)
             return
 
         if event.kind is not ControlKind.FADER:
@@ -97,13 +100,13 @@ class Engine:
             case Action.MASTER_BRIGHTNESS:
                 self._set_master(event.value)
             case Action.BRIGHTNESS:
-                for name in mapping.devices:
+                for name in names:
                     self._set_level(name, event.value)
             case Action.COLOR:
-                for name in mapping.devices:
+                for name in names:
                     self._submit(name, Capability.COLOR, hue_to_rgb(event.value))
             case Action.COLOR_TEMP:
-                for name in mapping.devices:
+                for name in names:
                     self._submit(name, Capability.COLOR_TEMP, level_to_kelvin(event.value))
 
     def _set_level(self, name: str, level: float) -> None:
@@ -121,7 +124,7 @@ class Engine:
             if self._power[name]:
                 self._submit(name, Capability.BRIGHTNESS, level * master)
 
-    def _toggle(self, names: tuple[str, ...]) -> None:
+    def _toggle(self, names: list[str]) -> None:
         """Turn the devices off if any are on, otherwise turn them all on."""
         turn_on = not any(self._power[name] for name in names)
         for name in names:

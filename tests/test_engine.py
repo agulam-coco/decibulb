@@ -158,3 +158,11 @@ def test_unsupported_commands_are_skipped(setup):
     engine, queues = setup
     engine.handle(fader("master", 0.5))
     assert queues["plug"].sent == []
+
+
+def test_devices_without_a_queue_are_skipped():
+    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk", "gone"))}
+    desk = RecordingQueue(FakeDevice("desk"))
+    engine = Engine(controls, {"desk": desk})
+    engine.handle(fader("fader.1", 0.5))
+    assert desk.sent == [(B, 0.5)]

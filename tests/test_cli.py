@@ -77,6 +77,7 @@ def test_no_command_prints_help(capsys):
     out = capsys.readouterr().out
     assert "monitor" in out
     assert "discover" in out
+    assert "run" in out
 
 
 def test_bad_profile_exits_cleanly(capsys):
@@ -123,3 +124,8 @@ def test_discover_bluetooth_off_exits_cleanly(monkeypatch, capsys):
     )
     assert main(["discover"]) == 1
     assert capsys.readouterr().err == "decibulb: Bluetooth is unavailable: off\n"
+    
+
+def test_run_without_config_exits_cleanly(tmp_path, capsys):
+    assert main(["run", "--config", str(tmp_path / "config.yaml")]) == 1
+    assert "Copy config.example.yaml" in capsys.readouterr().err

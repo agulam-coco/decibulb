@@ -12,7 +12,8 @@ Functions:
     translate: Convert one MIDI message into a ControlEvent.
 """
 
-from collections.abc import Iterator
+import asyncio
+from collections.abc import AsyncIterator, Iterator
 
 import mido
 
@@ -63,7 +64,7 @@ def translate(msg: mido.Message, profile: BoardProfile) -> ControlEvent | None:
         # Some devices release with note_on velocity 0 instead of note_off.
         pressed = msg.type == "note_on" and msg.velocity > 0
         return ControlEvent(profile.buttons[msg.note], ControlKind.BUTTON, float(pressed))
-    
+
     if msg.type == "control_change" and msg.control in profile.encoders:
         steps = msg.value if msg.value < ENCODER_SIGN_BIT else -(msg.value - ENCODER_SIGN_BIT)
         if steps == 0:
@@ -107,4 +108,24 @@ class MackieBoard:
         """
         with mido.open_input(self.port_name) as port:
             for msg in port:
+                yield msg, translate(msg, self.profile)
+
+    async def listen(self) -> AsyncIterator[tuple[mido.Message, ControlEvent | None]]:
+        """Async version of read() that doesn't block the event loop.
+
+        Stops and closes the port when the caller's task is cancelled.
+
+        Yields:
+            (message, event) pairs, the same as read().
+        """
+        loop = asyncio.get_running_loop()
+        messages: asyncio.Queue[mido.Message] = asyncio.Queue()
+
+        def on_message(msg: mido.Message) -> None:
+            # Runs on the MIDI library's own thread, so hand off to the event loop.
+            loop.call_soon_threadsafe(messages.put_nowait, msg)
+
+        with mido.open_input(self.port_name, callback=on_message):
+            while True:
+                msg = await messages.get()
                 yield msg, translate(msg, self.profile)

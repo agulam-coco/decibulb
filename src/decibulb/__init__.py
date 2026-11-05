@@ -1,4 +1,4 @@
-"""Turn an old mixer into a light switch.
+"""Turn an old mixer into a switch.
 
 Modules:
     boards: Board plugins that read hardware.

@@ -1,9 +1,11 @@
 """Send only the newest command to each device.
 
-A fader sends hundreds of values a second, but a Bluetooth bulb handles
-about 10. Instead of queueing every value, each device keeps only the
-newest pending value per kind of command and sends it when the device is
-free. Fast devices get every value; slow ones skip straight to the latest.
+A fader sends hundreds of values a second, but a Govee bulb can only show
+about 3 changes a second. Instead of queueing every value, each device
+keeps only the newest pending value per kind of command and sends it when
+the device is ready: once its previous command finished and at least
+min_interval has passed since that command started. Values in between
+are skipped.
 
 Classes:
     DeviceQueue: Command queue for one device that drops outdated values.
@@ -17,6 +19,11 @@ from typing import Any
 from decibulb.devices.base import Capability, Device, UnsupportedActionError
 
 logger = logging.getLogger(__name__)
+
+# Govee bulbs ack in ~50 ms but fade into each change; sending faster than
+# they can show builds a backlog inside the bulb. 0.3 s found by testing.
+MIN_SEND_INTERVAL = 0.3
+SLOW_COMMAND_SECONDS = 1.0  # a healthy Bluetooth command takes about 0.1 s
 
 _Pending = tuple[Any, float]  # (value, time.monotonic() when submitted)
 
@@ -33,20 +40,25 @@ class DeviceQueue:
 
     Call submit() as often as you like; it never blocks. A background task
     started with run() sends the newest value of each kind of command
-    whenever the device finishes its previous command.
+    whenever the device is ready for another one.
 
     Attributes:
         device: The device commands are sent to.
+        min_interval: Fewest seconds between the starts of two commands.
     """
 
-    def __init__(self, device: Device) -> None:
+    def __init__(self, device: Device, min_interval: float = MIN_SEND_INTERVAL) -> None:
         """Create an empty queue for `device`.
 
         Args:
             device: The device commands are sent to. Must already be connected
                 before run() sends anything.
+            min_interval: Fewest seconds between the starts of two commands.
+                0 sends as fast as the device acknowledges.
         """
         self.device = device
+        self.min_interval = min_interval
+        self._last_send = float("-inf")
         self._pending: dict[Capability, _Pending] = {}
         self._wake = asyncio.Event()
         self._idle = asyncio.Event()
@@ -76,27 +88,46 @@ class DeviceQueue:
             await self._wake.wait()
             self._wake.clear()
             while self._pending:
+                # Wait before taking the batch so the newest values are sent.
+                await self._wait_turn()
                 batch, self._pending = self._pending, {}
                 for capability, (value, submitted) in _in_send_order(batch):
+                    await self._wait_turn()
                     await self._send(capability, value, submitted)
             self._idle.set()
 
+    async def _wait_turn(self) -> None:
+        """Sleep until min_interval has passed since the last command started."""
+        delay = self._last_send + self.min_interval - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+
     async def _send(self, capability: Capability, value: Any, submitted: float) -> None:
         """Send one command, logging failures instead of raising them."""
-        started = time.monotonic()
+        started = self._last_send = time.monotonic()
         try:
             await getattr(self.device, _SETTERS[capability])(value)
         except (ConnectionError, UnsupportedActionError) as err:
             logger.warning("%s: %s", self.device.name, err)
             return
         finished = time.monotonic()
+        shown = f"{value:.2f}" if isinstance(value, float) else value
+        took = finished - started
         logger.debug(
-            "%s %s: sent in %.0f ms, %.0f ms after the control moved",
+            "%s %s %s: sent in %.0f ms, %.0f ms after the control moved",
             self.device.name,
             capability.value,
-            (finished - started) * 1000,
+            shown,
+            took * 1000,
             (finished - submitted) * 1000,
         )
+        if took > SLOW_COMMAND_SECONDS:
+            logger.warning(
+                "%s %s took %.1f s to send (usually about 0.1 s)",
+                self.device.name,
+                capability.value,
+                took,
+            )
 
 
 def _in_send_order(batch: dict[Capability, _Pending]) -> list[tuple[Capability, _Pending]]:

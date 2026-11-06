@@ -4,7 +4,7 @@ Usage:
     decibulb [--version] [--help]
     decibulb monitor [--profile NAME] [--port PORT] [--raw]
     decibulb discover [--timeout SECONDS] [--blink]
-    decibulb run [--config PATH] [--verbose]
+    decibulb run [--config PATH] [-v | -vv]
 
 Functions:
     build_parser: Build the top-level argument parser.
@@ -85,7 +85,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CONFIG_PATH,
         help=f"config file (default: {DEFAULT_CONFIG_PATH})",
     )
-    run.add_argument("--verbose", action="store_true", help="show debug messages")
+    run.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="show timing for every command; -vv also shows Bluetooth library messages",
+    )
     run.set_defaults(func=cmd_run)
 
     return parser
@@ -191,7 +197,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     """Control devices from a board until interrupted.
 
     Args:
-        args: Parsed arguments with `config` and `verbose`.
+        args: Parsed arguments with `config` and `verbose` (0, 1, or 2).
 
     Returns:
         Exit code.
@@ -200,8 +206,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         ConfigError: If the config is missing or invalid.
         OSError: If the board or Bluetooth is unavailable.
     """
-    if args.verbose:
+    if args.verbose >= 1:
         logging.getLogger("decibulb").setLevel(logging.DEBUG)
+    if args.verbose >= 2:
+        logging.getLogger("govee_ble_local").setLevel(logging.DEBUG)
 
     config = load_config(args.config)
     profile = load_profile(config.profile)

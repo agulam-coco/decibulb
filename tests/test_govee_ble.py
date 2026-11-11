@@ -132,3 +132,25 @@ def test_connect_with_bluetooth_off_gives_clean_error(monkeypatch):
     )
     with pytest.raises(OSError, match="Bluetooth is unavailable: No powered Bluetooth"):
         asyncio.run(GoveeBleBulb("desk_lamp", ADDRESS).connect())
+
+
+def test_read_power_asks_the_light(library_bulb):
+    library_bulb.update.return_value = mock.Mock(is_on=False)
+
+    async def scenario():
+        async with GoveeBleBulb("desk_lamp", ADDRESS) as lamp:
+            return await lamp.read_power()
+
+    assert asyncio.run(scenario()) is False
+    library_bulb.update.assert_awaited_once()
+
+
+def test_read_power_errors_become_connection_errors(library_bulb):
+    library_bulb.update.side_effect = GoveeBleError("no reply")
+
+    async def scenario():
+        async with GoveeBleBulb("desk_lamp", ADDRESS) as lamp:
+            await lamp.read_power()
+
+    with pytest.raises(ConnectionError, match="desk_lamp: no reply"):
+        asyncio.run(scenario())

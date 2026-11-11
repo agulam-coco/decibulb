@@ -69,9 +69,8 @@ class Engine:
     """Applies the user's config to each ControlEvent.
 
     The engine remembers each device's fader level and power state, so the
-    master fader can scale every light and buttons can toggle. Lights are
-    assumed to be on at startup. Devices without a queue, such as ones that
-    failed to connect, are skipped.
+    master fader can scale every light and buttons can toggle. Devices
+    without a queue, such as ones that failed to connect, are skipped.
 
     Attributes:
         master: Current master brightness, from 0.0 to 1.0.
@@ -82,6 +81,7 @@ class Engine:
         controls: dict[str, ControlMapping],
         queues: dict[str, DeviceQueue],
         curve: Curve = Curve.PERCEPTUAL,
+        power: dict[str, bool] | None = None,
     ) -> None:
         """Create an engine.
 
@@ -89,13 +89,16 @@ class Engine:
             controls: Control mappings from the config, by control name.
             queues: A running DeviceQueue for each connected device, by name.
             curve: How fader position maps to brightness.
+            power: Each device's power state at startup, by name. Devices
+                left out are assumed to be on.
         """
         self._controls = controls
         self._queues = queues
         self._curve = curve
         self.master = 1.0
         self._levels = {name: 1.0 for name in queues}
-        self._power = {name: True for name in queues}
+        power = power or {}
+        self._power = {name: power.get(name, True) for name in queues}
 
     def handle(self, event: ControlEvent) -> None:
         """Apply one event.

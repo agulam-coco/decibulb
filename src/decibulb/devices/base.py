@@ -66,6 +66,18 @@ class Device(ABC):
     async def close(self) -> None:
         """Close the connection. Safe to call more than once."""
 
+    async def read_power(self) -> bool | None:
+        """Ask the device whether it's on.
+
+        Returns:
+            True if on, False if off, or None if the device can't tell.
+            The default returns None.
+
+        Raises:
+            ConnectionError: If the device can't be reached.
+        """
+        return None
+
     async def set_power(self, on: bool) -> None:
         """Turn the device on or off.
 

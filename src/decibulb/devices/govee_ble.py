@@ -158,6 +158,12 @@ class GoveeBleBulb(Device):
         bulb, self._bulb = self._bulb, None
         await bulb.stop()
 
+    async def read_power(self) -> bool | None:
+        """Read whether the light is on. None if the light didn't say."""
+        with self._translate_errors():
+            state = await self._connected().update()
+        return state.is_on
+
     async def set_power(self, on: bool) -> None:
         """Turn the light on or off."""
         with self._translate_errors():

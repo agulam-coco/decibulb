@@ -156,3 +156,53 @@ def test_wrong_kind_of_control_is_ignored(setup):
 
 def test_unsupported_commands_are_skipped(setup):
     engine, queues = setup
+    engine.handle(fader("master", 0.5))
+    assert queues["plug"].sent == []
+
+
+def test_devices_without_a_queue_are_skipped():
+    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk", "gone"))}
+    desk = RecordingQueue(FakeDevice("desk"))
+    engine = Engine(controls, {"desk": desk}, Curve.LINEAR)
+    engine.handle(fader("fader.1", 0.5))
+    assert desk.sent == [(B, 0.5)]
+
+
+@pytest.mark.parametrize(
+    ("position", "perceptual"),
+    [(0.0, 0.0), (0.1, 0.01), (0.5, 0.25), (0.8, 0.64), (1.0, 1.0)],
+)
+def test_apply_curve(position, perceptual):
+    assert apply_curve(position, Curve.PERCEPTUAL) == pytest.approx(perceptual)
+    assert apply_curve(position, Curve.LINEAR) == position
+
+
+def test_perceptual_curve_applies_to_fader_and_master():
+    controls = {
+        "fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",)),
+        "master": ControlMapping("master", Action.MASTER_BRIGHTNESS),
+    }
+    desk = RecordingQueue(FakeDevice("desk"))
+    engine = Engine(controls, {"desk": desk}, Curve.PERCEPTUAL)
+    engine.handle(fader("fader.1", 0.5))
+    engine.handle(fader("master", 0.5))
+    assert desk.sent == [(B, pytest.approx(0.25)), (B, pytest.approx(0.0625))]
+
+
+def test_lights_that_start_off_are_turned_on_by_their_fader():
+    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",))}
+    desk = RecordingQueue(FakeDevice("desk"))
+    engine = Engine(controls, {"desk": desk}, Curve.LINEAR, power={"desk": False})
+    engine.handle(fader("fader.1", 0.5))
+    assert desk.sent == [(P, True), (B, 0.5)]
+
+
+def test_master_skips_lights_that_start_off():
+    controls = {"master": ControlMapping("master", Action.MASTER_BRIGHTNESS)}
+    desk = RecordingQueue(FakeDevice("desk"))
+    corner = RecordingQueue(FakeDevice("corner"))
+    queues = {"desk": desk, "corner": corner}
+    engine = Engine(controls, queues, Curve.LINEAR, power={"desk": False})
+    engine.handle(fader("master", 0.5))
+    assert desk.sent == []
+    assert corner.sent == [(B, 0.5)]

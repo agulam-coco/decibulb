@@ -57,3 +57,19 @@ def test_fake_device_records_calls_and_connection():
         ("color", (255, 0, 0)),
         ("color_temp", 2700),
     ]
+
+
+def test_read_power_defaults_to_unknown():
+    assert asyncio.run(PowerOnlyDevice("plug").read_power()) is None
+
+
+def test_fake_device_reports_its_power_state():
+    lamp = FakeDevice("desk_lamp", on=False)
+
+    async def scenario():
+        before = await lamp.read_power()
+        await lamp.set_power(True)
+        return before, await lamp.read_power()
+
+    assert asyncio.run(scenario()) == (False, True)
+    assert lamp.calls == [("power", True)]

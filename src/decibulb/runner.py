@@ -91,10 +91,11 @@ async def run(config: Config, profile: BoardProfile, board: Board) -> None:
         logger.warning(warning)
 
     connected = await _connect_all(devices)
+    power = await _read_power_all(connected)
     queues = {name: DeviceQueue(device) for name, device in connected.items()}
     workers = [asyncio.create_task(queue.run()) for queue in queues.values()]
-    engine = Engine(config.controls, queues, config.brightness_curve)
-    
+    engine = Engine(config.controls, queues, config.brightness_curve, power)
+
     print(f"Ready: {len(connected)} of {len(devices)} devices connected. Press Ctrl+C to stop.")
     try:
         async for _msg, event in board.listen():
@@ -117,6 +118,21 @@ async def _connect_all(devices: dict[str, Device]) -> dict[str, Device]:
         else:
             connected[name] = device
     return connected
+
+
+async def _read_power_all(devices: dict[str, Device]) -> dict[str, bool]:
+    """Ask each device whether it's on. Devices that can't tell are left out."""
+    power = {}
+    for name, device in devices.items():
+        try:
+            on = await device.read_power()
+        except ConnectionError as err:
+            logger.warning("Couldn't read whether %s is on, assuming on: %s", name, err)
+            continue
+        if on is not None:
+            power[name] = on
+            print(f"{name} is {'on' if on else 'off'}.")
+    return power
 
 
 async def _shut_down(queues: dict[str, DeviceQueue], workers: list[asyncio.Task]) -> None:

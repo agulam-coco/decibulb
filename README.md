@@ -184,14 +184,21 @@ decibulb run
 ```
 
 ```
-Listening to Zoom R24 on R24:R24 MIDI 1 24:0.
 Connecting desk_lamp...
 Connecting corner_lamp...
 Connecting wardrobe_lamp...
+desk_lamp is on.
+corner_lamp is off.
+wardrobe_lamp is on.
 Ready: 3 of 3 devices connected. Press Ctrl+C to stop.
+Zoom R24 connected on R24:R24 MIDI 1 24:0.
 ```
 
-Lights that can't be found are skipped with a warning, and everything else keeps working.
+decibulb is built to keep running when things aren't ready:
+
+- **Lights it can't find** are retried every 30 seconds in the background. When one shows up, its controls start working.
+- **The board** doesn't have to be on when decibulb starts. decibulb waits for it, notices when it's turned off, and picks it back up when it comes back.
+- **Each light's on/off state** is read when it connects, so the first press of a toggle button does the right thing, and the master fader skips lights that are off.
 
 | Option | What it does |
 |---|---|
@@ -201,11 +208,31 @@ Lights that can't be found are skipped with a warning, and everything else keeps
 
 Leave `-v` off for everyday use. Printing dozens of lines a second over SSH can slow things down.
 
+### 5. Start it on boot
+
+`systemd/decibulb.service` runs decibulb as a service: it starts when the Pi boots and restarts if it crashes. It assumes your username is `pi` and the repo is in `~/decibulb`. Edit the `User`, `WorkingDirectory`, and `ExecStart` lines if not.
+
+```bash
+sudo cp systemd/decibulb.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now decibulb
+```
+
+| Task | Command |
+|---|---|
+| See if it's running | `systemctl status decibulb` |
+| Watch the log live | `journalctl -u decibulb -f` |
+| Restart after changing `config.yaml` or pulling new code | `sudo systemctl restart decibulb` |
+| Stop it | `sudo systemctl stop decibulb` |
+| Don't start on boot anymore | `sudo systemctl disable decibulb` |
+
+**Stop the service before running decibulb by hand** (`discover`, `run -v`, `scripts/lag_test.py`). A bulb only accepts one connection, so a second copy can't connect to anything.
+
 ## Hardware notes
 
 ### Zoom R24
 
-- **Interface mode:** press USB, select AUDIO I/F, then EXECUTE. The board shows up as `R24 MIDI 1`. The R24 forgets this when it powers off, so do it again after every restart.
+- **Interface mode:** press USB, select AUDIO I/F, then EXECUTE. The board shows up as `R24 MIDI 1`. The R24 forgets this when it powers off, so do it again after every restart. `decibulb run` waits for it, so you can do this whenever.
 - **Power:** see [Power](#power).
 - **Status keys** send a different note in REC, SOLO, and MUTE mode, so they show up as `rec.1` to `rec.8`, `solo.1` to `solo.8`, and `mute.1` to `mute.8`.
 - The R24 sends empty jog wheel messages when you switch menus (RHYTHM, EFFECT, USB). decibulb ignores them.
@@ -217,6 +244,7 @@ Leave `-v` off for everyday use. Printing dozens of lines a second over SSH can 
 - A bulb usually accepts only one Bluetooth connection. Close the Govee app or turn off Bluetooth on your phone if the Pi can't find a bulb. Also make sure no other copy of decibulb is still running (`pgrep -af decibulb`).
 - decibulb keeps the Bluetooth connection open the whole time it runs, so there's no reconnect delay when you grab a fader after a pause.
 - **A bulb says "got it" much faster than it can show a change.** It acknowledges a command in about 50 ms, but then fades into the new value. Send faster than it can fade, and it builds up its own backlog. The light keeps moving for seconds after you let go, worst on slow fader moves. decibulb sends at most one command every **0.3 seconds** per bulb (`MIN_SEND_INTERVAL` in `throttle.py`), always the newest value. That number came from testing: lower ones lagged on slow moves.
+- **Commands that wouldn't change anything are skipped.** Brightness only comes in whole percents, and color temperature is rounded to 50K steps (smaller changes aren't visible). If the bulb is already showing that value, decibulb doesn't send it, so the next real change doesn't wait behind it.
 - Brightness only has 100 levels, so very slow fader moves show small steps. That's the bulb, not decibulb.
 - The dimmest setting is 1%. Govee bulbs can't go to 0% brightness, so "off" is a separate power command.
 - Color temperature ranges from 2700K (warm) to 6500K (cool). Values outside that are clamped.
@@ -276,6 +304,8 @@ decibulb/
 │   └── runner.py               connects everything for decibulb run
 ├── scripts/
 │   └── lag_test.py             replays fader moves against real lights
+├── systemd/
+│   └── decibulb.service        runs decibulb on boot
 └── tests/
     ├── test_cli.py
     ├── test_config.py
@@ -295,8 +325,11 @@ decibulb/
 - [x] Govee Bluetooth device plugin
 - [x] `decibulb discover`: find lights and blink them to tell which is which
 - [x] Config file and `decibulb run`: faders control lights
-- [ ] Read each light's real on/off state when decibulb starts
-- [ ] Run as a service so it starts on boot
+- [x] Read each light's real on/off state when decibulb starts
+- [x] Skip commands that wouldn't change the light
+- [x] Wait for the board and retry missing lights in the background
+- [x] Run as a service so it starts on boot
+- [ ] Tests on GitHub Actions, demo GIF, tag v0.1.0
 - [ ] Room volume: Alexa plays through the Pi, one fader sets the volume
 - [ ] Home Assistant and MQTT devices, plain MIDI CC boards
 

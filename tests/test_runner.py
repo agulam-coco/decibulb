@@ -1,13 +1,10 @@
 """Tests for decibulb.runner and decibulb.devices.registry."""
 
 import asyncio
-import threading
 
-import mido
 import pytest
 
 from decibulb import runner
-from decibulb.boards.mackie import MackieBoard
 from decibulb.config import Action, Config, ConfigError, ControlMapping, DeviceConfig
 from decibulb.devices.base import Capability
 from decibulb.devices.fake import FakeDevice
@@ -22,11 +19,13 @@ R24 = load_profile("zoom-r24")
 class FakeBoard:
     """Yields a fixed list of events, then stops."""
 
-    def __init__(self, events):
+    def __init__(self, events, delay=0.0):
         self.events = events
+        self.delay = delay
 
     async def listen(self):
         for event in self.events:
+            await asyncio.sleep(self.delay)
             yield None, event
 
 
@@ -120,36 +119,6 @@ def test_run_skips_devices_that_fail_to_connect(monkeypatch, caplog):
     assert built["corner"].calls == [("brightness", pytest.approx(0.3**2))]
 
 
-def test_board_listen_receives_messages_from_another_thread(monkeypatch):
-    captured = {}
-
-    class FakePort:
-        def __init__(self, name, callback):
-            captured["callback"] = callback
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc_info):
-            captured["closed"] = True
-
-    monkeypatch.setattr(mido, "open_input", FakePort)
-
-    async def main():
-        listener = MackieBoard(R24, port_name="R24").listen()
-        first = asyncio.ensure_future(anext(listener))
-        await asyncio.sleep(0)
-        message = mido.Message("pitchwheel", channel=0, pitch=8191)
-        threading.Thread(target=captured["callback"], args=(message,)).start()
-        msg, event = await asyncio.wait_for(first, 1)
-        await listener.aclose()
-        return event
-
-    event = asyncio.run(main())
-    assert (event.control, event.value) == ("fader.1", 1.0)
-    assert captured["closed"]
-
-
 class PowerUnreadableDevice(FakeDevice):
     async def read_power(self):
         raise ConnectionError("no reply")
@@ -186,3 +155,34 @@ def test_run_assumes_on_when_power_cant_be_read(monkeypatch, caplog):
 
     assert "Couldn't read whether desk is on, assuming on: no reply" in caplog.text
     assert built["desk"].calls == [("brightness", pytest.approx(0.25))]
+
+
+class LateDevice(FakeDevice):
+    """A FakeDevice that can't be reached until its second connect attempt."""
+
+    def __init__(self, name, on=True):
+        super().__init__(name, on)
+        self.attempts = 0
+
+    async def connect(self):
+        self.attempts += 1
+        if self.attempts == 1:
+            raise ConnectionError(f"{self.name}: no Govee light found")
+        await super().connect()
+
+
+def test_devices_that_connect_late_join_in(monkeypatch, capsys):
+    monkeypatch.setattr(runner, "RECONNECT_SECONDS", 0.01)
+    built = {"desk": LateDevice("desk", on=False), "corner": FakeDevice("corner")}
+    monkeypatch.setattr(runner, "create_device", lambda entry: built[entry.name])
+    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",))}
+    # The delay gives the retry time to connect the desk lamp before the event.
+    board = FakeBoard([ControlEvent("fader.1", ControlKind.FADER, 1.0)], delay=0.1)
+
+    asyncio.run(runner.run(make_config(controls), R24, board))
+
+    out = capsys.readouterr().out
+    assert "Ready: 1 of 2 devices connected" in out
+    assert "desk connected." in out
+    assert built["desk"].calls == [("power", True), ("brightness", 1.0)]
+    assert not built["desk"].connected

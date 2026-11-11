@@ -131,7 +131,7 @@ def cmd_monitor(args: argparse.Namespace) -> int:
     """
     profile = load_profile(args.profile)
     board = MackieBoard(profile, args.port)
-    print(f"Listening to {profile.name} on {board.port_name}. Press Ctrl+C to stop.")
+    print(f"Listening to {profile.name} on {board.find_port()}. Press Ctrl+C to stop.")
 
     try:
         for msg, event in board.read():
@@ -204,7 +204,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     Raises:
         ConfigError: If the config is missing or invalid.
-        OSError: If the board or Bluetooth is unavailable.
+        OSError: If Bluetooth is unavailable.
     """
     if args.verbose >= 1:
         logging.getLogger("decibulb").setLevel(logging.DEBUG)
@@ -214,7 +214,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     profile = load_profile(config.profile)
     board = MackieBoard(profile, config.port)
-    print(f"Listening to {profile.name} on {board.port_name}.")
 
     try:
         asyncio.run(runner.run(config, profile, board))
@@ -245,7 +244,3 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigError, OSError) as err:
         print(f"decibulb: {err}", file=sys.stderr)
         return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())

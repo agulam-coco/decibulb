@@ -3,10 +3,15 @@
 MIDI values come from a real Zoom R24 captured with aseqdump.
 """
 
+import asyncio
+import logging
+import threading
+
 import mido
 import pytest
 
-from decibulb.boards.mackie import translate
+from decibulb.boards import mackie
+from decibulb.boards.mackie import MackieBoard, translate
 from decibulb.events import ControlKind
 from decibulb.profiles import load_profile
 
@@ -74,3 +79,90 @@ def test_zero_step_jog_is_skipped(value):
 )
 def test_unknown_messages_return_none(msg):
     assert translate(msg, R24) is None
+
+
+class FakeMidi:
+    """Stands in for the MIDI system: a list of ports that tests can change."""
+
+    def __init__(self, monkeypatch, ports=()):
+        self.ports = list(ports)
+        self.callback = None
+        self.closed = 0
+        monkeypatch.setattr(mido, "get_input_names", lambda: list(self.ports))
+        monkeypatch.setattr(mido, "open_input", self.open_input)
+
+    def open_input(self, name, callback=None):
+        self.callback = callback
+        midi = self
+
+        class Port:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                midi.closed += 1
+
+        return Port()
+
+    def send(self, msg):
+        """Deliver a message from another thread, like the real MIDI library."""
+        thread = threading.Thread(target=self.callback, args=(msg,))
+        thread.start()
+        thread.join()
+
+
+FADER_UP = mido.Message("pitchwheel", channel=0, pitch=8191)
+
+
+def test_find_port_lists_connected_ports(monkeypatch):
+    FakeMidi(monkeypatch, ["Midi Through:Midi Through Port-0 14:0"])
+    with pytest.raises(OSError, match="No MIDI input matching 'R24 MIDI'. Connected: Midi Through"):
+        MackieBoard(R24).find_port()
+
+
+def test_find_port_uses_the_profiles_match(monkeypatch):
+    FakeMidi(monkeypatch, ["Midi Through:Midi Through Port-0 14:0", "R24:R24 MIDI 1 24:0"])
+    assert MackieBoard(R24).find_port() == "R24:R24 MIDI 1 24:0"
+
+
+def test_listen_waits_for_the_board_and_survives_it_leaving(monkeypatch, caplog):
+    midi = FakeMidi(monkeypatch)
+
+    async def wait_for(condition):
+        while not condition():
+            await asyncio.sleep(0.01)
+
+    async def main():
+        listener = MackieBoard(R24).listen(poll_seconds=0.01)
+        events = []
+
+        async def collect():
+            async for _msg, event in listener:
+                events.append(event)
+
+        task = asyncio.create_task(collect())
+        await asyncio.sleep(0.05)
+        assert midi.callback is None  # still waiting for the board
+
+        midi.ports = ["R24:R24 MIDI 1 24:0"]
+        await wait_for(lambda: midi.callback is not None)
+        midi.send(FADER_UP)
+        await wait_for(lambda: len(events) == 1)
+
+        # Turned off: the port disappears. Turned back on: it may get a new number.
+        midi.ports = []
+        await wait_for(lambda: midi.closed == 1)
+        midi.callback = None
+        midi.ports = ["R24:R24 MIDI 1 28:0"]
+        await wait_for(lambda: midi.callback is not None)
+        midi.send(FADER_UP)
+        await wait_for(lambda: len(events) == 2)
+
+        task.cancel()
+        return events
+
+    with caplog.at_level(logging.WARNING, logger=mackie.__name__):
+        events = asyncio.run(asyncio.wait_for(main(), 2))
+    assert [(event.control, event.value) for event in events] == [("fader.1", 1.0)] * 2
+    assert "Waiting for Zoom R24 to be connected..." in caplog.text
+    assert "Zoom R24 disconnected." in caplog.text

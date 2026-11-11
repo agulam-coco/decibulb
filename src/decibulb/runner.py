@@ -7,7 +7,7 @@ Functions:
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol
 
 from decibulb.config import Action, Config
@@ -21,6 +21,7 @@ from decibulb.throttle import DeviceQueue
 logger = logging.getLogger(__name__)
 
 SHUTDOWN_TIMEOUT = 2.0  # seconds to finish sending final values on exit
+RECONNECT_SECONDS = 30.0  # each attempt scans for up to 10 s, which slows the radio
 
 _REQUIRED_CAPABILITY = {
     Action.BRIGHTNESS: Capability.BRIGHTNESS,
@@ -75,13 +76,14 @@ def check_controls(config: Config, profile: BoardProfile, devices: dict[str, Dev
 async def run(config: Config, profile: BoardProfile, board: Board) -> None:
     """Connect everything and handle events until the board stops or the task is cancelled.
 
-    Devices that fail to connect are skipped with a warning. On exit, the
-    last values are sent before devices disconnect.
+    Devices that fail to connect are retried in the background and join in
+    when they connect. On exit, the last values are sent before devices
+    disconnect.
 
     Args:
         config: The loaded config.
         profile: The board's profile.
-        board: An opened board to read events from.
+        board: The board to read events from.
 
     Raises:
         ConfigError: If a device entry has an unknown type or wrong settings.
@@ -91,10 +93,18 @@ async def run(config: Config, profile: BoardProfile, board: Board) -> None:
         logger.warning(warning)
 
     connected = await _connect_all(devices)
-    power = await _read_power_all(connected)
+    power = {name: await _read_power(name, device) for name, device in connected.items()}
     queues = {name: DeviceQueue(device) for name, device in connected.items()}
     workers = [asyncio.create_task(queue.run()) for queue in queues.values()]
     engine = Engine(config.controls, queues, config.brightness_curve, power)
+
+    def start(name: str, device: Device) -> None:
+        queue = DeviceQueue(device)
+        workers.append(asyncio.create_task(queue.run()))
+        engine.add_device(name, queue, power[name])
+
+    missing = {name: device for name, device in devices.items() if name not in connected}
+    retrying = asyncio.create_task(_keep_connecting(missing, power, start))
 
     print(f"Ready: {len(connected)} of {len(devices)} devices connected. Press Ctrl+C to stop.")
     try:
@@ -102,7 +112,8 @@ async def run(config: Config, profile: BoardProfile, board: Board) -> None:
             if event is not None:
                 engine.handle(event)
     finally:
-        await _shut_down(queues, workers)
+        retrying.cancel()
+        await _shut_down(queues, workers, devices)
 
 
 async def _connect_all(devices: dict[str, Device]) -> dict[str, Device]:
@@ -114,28 +125,48 @@ async def _connect_all(devices: dict[str, Device]) -> dict[str, Device]:
         try:
             await device.connect()
         except ConnectionError as err:
-            logger.warning("%s", err)
+            logger.warning("%s. Will keep trying.", err)
         else:
             connected[name] = device
     return connected
 
 
-async def _read_power_all(devices: dict[str, Device]) -> dict[str, bool]:
-    """Ask each device whether it's on. Devices that can't tell are left out."""
-    power = {}
-    for name, device in devices.items():
-        try:
-            on = await device.read_power()
-        except ConnectionError as err:
-            logger.warning("Couldn't read whether %s is on, assuming on: %s", name, err)
-            continue
-        if on is not None:
-            power[name] = on
-            print(f"{name} is {'on' if on else 'off'}.")
-    return power
+async def _keep_connecting(
+    missing: dict[str, Device],
+    power: dict[str, bool],
+    start: Callable[[str, Device], None],
+) -> None:
+    """Retry missing devices until all connect, calling start() for each one."""
+    while missing:
+        await asyncio.sleep(RECONNECT_SECONDS)
+        for name, device in list(missing.items()):
+            try:
+                await device.connect()
+            except (ConnectionError, OSError) as err:
+                logger.debug("Still can't reach %s: %s", name, err)
+                continue
+            del missing[name]
+            print(f"{name} connected.")
+            power[name] = await _read_power(name, device)
+            start(name, device)
 
 
-async def _shut_down(queues: dict[str, DeviceQueue], workers: list[asyncio.Task]) -> None:
+async def _read_power(name: str, device: Device) -> bool:
+    """Ask a device whether it's on. Assume on if it can't tell."""
+    try:
+        on = await device.read_power()
+    except ConnectionError as err:
+        logger.warning("Couldn't read whether %s is on, assuming on: %s", name, err)
+        return True
+    if on is None:
+        return True
+    print(f"{name} is {'on' if on else 'off'}.")
+    return on
+
+
+async def _shut_down(
+    queues: dict[str, DeviceQueue], workers: list[asyncio.Task], devices: dict[str, Device]
+) -> None:
     """Send any final values, stop the queues, and disconnect every device."""
     try:
         idle = [queue.wait_idle() for queue in queues.values()]
@@ -144,5 +175,6 @@ async def _shut_down(queues: dict[str, DeviceQueue], workers: list[asyncio.Task]
         logger.warning("Gave up sending final values after %g seconds", SHUTDOWN_TIMEOUT)
     for worker in workers:
         worker.cancel()
-    for queue in queues.values():
-        await queue.device.close()
+    # Includes devices that never connected; close() is safe either way.
+    for device in devices.values():
+        await device.close()

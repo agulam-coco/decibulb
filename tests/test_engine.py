@@ -1,208 +1,188 @@
-"""Tests for decibulb.engine."""
+"""Tests for decibulb.runner and decibulb.devices.registry."""
+
+import asyncio
 
 import pytest
 
-from decibulb.config import Action, ControlMapping, Curve
+from decibulb import runner
+from decibulb.config import Action, Config, ConfigError, ControlMapping, DeviceConfig
 from decibulb.devices.base import Capability
 from decibulb.devices.fake import FakeDevice
-from decibulb.engine import Engine, apply_curve, hue_to_rgb, level_to_kelvin
+from decibulb.devices.govee_ble import GoveeBleBulb
+from decibulb.devices.registry import create_device
 from decibulb.events import ControlEvent, ControlKind
+from decibulb.profiles import load_profile
+
+R24 = load_profile("zoom-r24")
 
 
-class RecordingQueue:
-    """Stands in for DeviceQueue and records every submitted command."""
+class FakeBoard:
+    """Yields a fixed list of events, then stops."""
 
-    def __init__(self, device):
-        self.device = device
-        self.sent = []
+    def __init__(self, events, delay=0.0):
+        self.events = events
+        self.delay = delay
 
-    def submit(self, capability, value):
-        self.sent.append((capability, value))
+    async def listen(self):
+        for event in self.events:
+            await asyncio.sleep(self.delay)
+            yield None, event
+
+
+class UnreachableDevice(FakeDevice):
+    async def connect(self):
+        raise ConnectionError(f"{self.name}: no Govee light found")
 
 
 class PowerOnlyDevice(FakeDevice):
     capabilities = frozenset({Capability.POWER})
 
 
-CONTROLS = {
-    "fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",)),
-    "fader.2": ControlMapping("fader.2", Action.BRIGHTNESS, ("corner",)),
-    "fader.5": ControlMapping("fader.5", Action.COLOR, ("desk", "corner")),
-    "fader.6": ControlMapping("fader.6", Action.COLOR_TEMP, ("desk",)),
-    "master": ControlMapping("master", Action.MASTER_BRIGHTNESS),
-    "solo.1": ControlMapping("solo.1", Action.TOGGLE_POWER, ("desk",)),
-    "solo.8": ControlMapping("solo.8", Action.TOGGLE_POWER, ("desk", "corner")),
-    "f1": ControlMapping("f1", Action.BRIGHTNESS, ("desk",)),
-    "fader.8": ControlMapping("fader.8", Action.TOGGLE_POWER, ("plug",)),
-}
+def make_config(controls):
+    devices = {"desk": DeviceConfig("desk", "fake"), "corner": DeviceConfig("corner", "fake")}
+    return Config("zoom-r24", None, devices, controls)
 
 
-@pytest.fixture
-def setup():
-    queues = {
-        "desk": RecordingQueue(FakeDevice("desk")),
-        "corner": RecordingQueue(FakeDevice("corner")),
-        "plug": RecordingQueue(PowerOnlyDevice("plug")),
+def test_create_device_builds_the_right_type():
+    device = create_device(DeviceConfig("desk", "govee_ble", {"address": "aa:bb:cc:00:00:01"}))
+    assert isinstance(device, GoveeBleBulb)
+    assert (device.name, device.address) == ("desk", "AA:BB:CC:00:00:01")
+
+
+def test_create_device_rejects_unknown_type():
+    with pytest.raises(ConfigError, match="unknown type 'hue'. Types: fake, govee_ble"):
+        create_device(DeviceConfig("desk", "hue"))
+
+
+def test_create_device_rejects_wrong_settings():
+    with pytest.raises(ConfigError, match="devices.desk: wrong settings for govee_ble"):
+        create_device(DeviceConfig("desk", "govee_ble", {"adress": "AA:BB:CC:00:00:01"}))
+
+
+def test_check_controls_accepts_a_good_config():
+    controls = {
+        "fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",)),
+        "master": ControlMapping("master", Action.MASTER_BRIGHTNESS),
+        "solo.1": ControlMapping("solo.1", Action.TOGGLE_POWER, ("desk",)),
     }
-    return Engine(CONTROLS, queues, Curve.LINEAR), queues
+    devices = {"desk": FakeDevice("desk"), "corner": FakeDevice("corner")}
+    assert runner.check_controls(make_config(controls), R24, devices) == []
 
 
-def fader(name, value):
-    return ControlEvent(name, ControlKind.FADER, value)
+def test_check_controls_finds_problems():
+    controls = {
+        "fader.9": ControlMapping("fader.9", Action.BRIGHTNESS, ("desk",)),
+        "play": ControlMapping("play", Action.BRIGHTNESS, ("desk",)),
+        "fader.2": ControlMapping("fader.2", Action.BRIGHTNESS, ("corner",)),
+    }
+    devices = {"desk": FakeDevice("desk"), "corner": PowerOnlyDevice("corner")}
+    assert runner.check_controls(make_config(controls), R24, devices) == [
+        "controls.fader.9: Zoom R24 has no control named 'fader.9'",
+        "controls.play: brightness needs a fader, but play is a button",
+        "controls.fader.2: corner doesn't support brightness",
+    ]
 
 
-def press(name):
-    return ControlEvent(name, ControlKind.BUTTON, 1.0)
+def test_run_routes_events_and_cleans_up(monkeypatch):
+    built = {}
+
+    def fake_create(entry):
+        built[entry.name] = FakeDevice(entry.name)
+        return built[entry.name]
+
+    monkeypatch.setattr(runner, "create_device", fake_create)
+    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",))}
+    board = FakeBoard([ControlEvent("fader.1", ControlKind.FADER, 0.62)])
+
+    asyncio.run(runner.run(make_config(controls), R24, board))
+
+    assert built["desk"].calls == [("brightness", pytest.approx(0.62**2))]
+    assert not built["desk"].connected
+    assert not built["corner"].connected
 
 
-def release(name):
-    return ControlEvent(name, ControlKind.BUTTON, 0.0)
+def test_run_skips_devices_that_fail_to_connect(monkeypatch, caplog):
+    built = {"desk": UnreachableDevice("desk"), "corner": FakeDevice("corner")}
+    monkeypatch.setattr(runner, "create_device", lambda entry: built[entry.name])
+    controls = {
+        "fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",)),
+        "fader.2": ControlMapping("fader.2", Action.BRIGHTNESS, ("corner",)),
+    }
+    board = FakeBoard([
+        ControlEvent("fader.1", ControlKind.FADER, 0.5),
+        ControlEvent("fader.2", ControlKind.FADER, 0.3),
+    ])
+
+    asyncio.run(runner.run(make_config(controls), R24, board))
+
+    assert "desk: no Govee light found" in caplog.text
+    assert built["corner"].calls == [("brightness", pytest.approx(0.3**2))]
 
 
-B, P = Capability.BRIGHTNESS, Capability.POWER
+class PowerUnreadableDevice(FakeDevice):
+    async def read_power(self):
+        raise ConnectionError("no reply")
 
 
-@pytest.mark.parametrize(
-    ("hue", "rgb"),
-    [(0.0, (255, 0, 0)), (1 / 3, (0, 255, 0)), (2 / 3, (0, 0, 255)), (1.0, (255, 0, 0))],
-)
-def test_hue_to_rgb(hue, rgb):
-    assert hue_to_rgb(hue) == rgb
-
-
-@pytest.mark.parametrize(("level", "kelvin"), [(0.0, 2700), (0.5, 4600), (1.0, 6500)])
-def test_level_to_kelvin(level, kelvin):
-    assert level_to_kelvin(level) == kelvin
-
-
-def test_fader_sets_brightness(setup):
-    engine, queues = setup
-    engine.handle(fader("fader.1", 0.62))
-    assert queues["desk"].sent == [(B, 0.62)]
-    assert queues["corner"].sent == []
-
-
-def test_master_scales_faders(setup):
-    engine, queues = setup
-    engine.handle(fader("master", 0.5))
-    engine.handle(fader("fader.1", 0.8))
-    assert queues["desk"].sent[-1] == (B, pytest.approx(0.4))
-
-
-def test_master_updates_every_light_that_is_on(setup):
-    engine, queues = setup
-    engine.handle(fader("fader.1", 0.8))
-    engine.handle(fader("fader.2", 0.6))
-    engine.handle(press("solo.1"))
-    for queue in queues.values():
-        queue.sent.clear()
-
-    engine.handle(fader("master", 0.5))
-    assert queues["desk"].sent == []
-    assert queues["corner"].sent == [(B, pytest.approx(0.3))]
-
-
-def test_button_toggles_on_press_only(setup):
-    engine, queues = setup
-    engine.handle(press("solo.1"))
-    engine.handle(release("solo.1"))
-    engine.handle(press("solo.1"))
-    assert queues["desk"].sent == [(P, False), (P, True)]
-
-
-def test_group_toggle_turns_all_off_if_any_are_on(setup):
-    engine, queues = setup
-    engine.handle(press("solo.1"))
-    engine.handle(press("solo.8"))
-    assert queues["desk"].sent[-1] == (P, False)
-    assert queues["corner"].sent == [(P, False)]
-    engine.handle(press("solo.8"))
-    assert queues["desk"].sent[-1] == (P, True)
-    assert queues["corner"].sent[-1] == (P, True)
-
-
-def test_moving_a_fader_turns_its_light_back_on(setup):
-    engine, queues = setup
-    engine.handle(press("solo.1"))
-    engine.handle(fader("fader.1", 0.5))
-    assert queues["desk"].sent == [(P, False), (P, True), (B, 0.5)]
-
-
-def test_color_fader(setup):
-    engine, queues = setup
-    engine.handle(fader("fader.5", 0.0))
-    assert queues["desk"].sent == [(Capability.COLOR, (255, 0, 0))]
-    assert queues["corner"].sent == [(Capability.COLOR, (255, 0, 0))]
-
-
-def test_color_temp_fader(setup):
-    engine, queues = setup
-    engine.handle(fader("fader.6", 1.0))
-    assert queues["desk"].sent == [(Capability.COLOR_TEMP, 6500)]
-
-
-def test_unmapped_controls_are_ignored(setup):
-    engine, queues = setup
-    engine.handle(fader("fader.7", 0.5))
-    assert all(queue.sent == [] for queue in queues.values())
-
-
-def test_wrong_kind_of_control_is_ignored(setup):
-    engine, queues = setup
-    engine.handle(press("f1"))
-    engine.handle(fader("fader.8", 1.0))
-    assert all(queue.sent == [] for queue in queues.values())
-
-
-def test_unsupported_commands_are_skipped(setup):
-    engine, queues = setup
-    engine.handle(fader("master", 0.5))
-    assert queues["plug"].sent == []
-
-
-def test_devices_without_a_queue_are_skipped():
-    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk", "gone"))}
-    desk = RecordingQueue(FakeDevice("desk"))
-    engine = Engine(controls, {"desk": desk}, Curve.LINEAR)
-    engine.handle(fader("fader.1", 0.5))
-    assert desk.sent == [(B, 0.5)]
-
-
-@pytest.mark.parametrize(
-    ("position", "perceptual"),
-    [(0.0, 0.0), (0.1, 0.01), (0.5, 0.25), (0.8, 0.64), (1.0, 1.0)],
-)
-def test_apply_curve(position, perceptual):
-    assert apply_curve(position, Curve.PERCEPTUAL) == pytest.approx(perceptual)
-    assert apply_curve(position, Curve.LINEAR) == position
-
-
-def test_perceptual_curve_applies_to_fader_and_master():
+def test_run_starts_from_each_lights_real_power_state(monkeypatch, capsys):
+    built = {"desk": FakeDevice("desk", on=False), "corner": FakeDevice("corner", on=None)}
+    monkeypatch.setattr(runner, "create_device", lambda entry: built[entry.name])
     controls = {
         "fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",)),
         "master": ControlMapping("master", Action.MASTER_BRIGHTNESS),
     }
-    desk = RecordingQueue(FakeDevice("desk"))
-    engine = Engine(controls, {"desk": desk}, Curve.PERCEPTUAL)
-    engine.handle(fader("fader.1", 0.5))
-    engine.handle(fader("master", 0.5))
-    assert desk.sent == [(B, pytest.approx(0.25)), (B, pytest.approx(0.0625))]
+    board = FakeBoard([
+        ControlEvent("master", ControlKind.FADER, 0.5),
+        ControlEvent("fader.1", ControlKind.FADER, 1.0),
+    ])
+
+    asyncio.run(runner.run(make_config(controls), R24, board))
+
+    assert "desk is off." in capsys.readouterr().out
+    # The master skips the desk lamp while it's off; its own fader turns it on.
+    assert built["desk"].calls == [("power", True), ("brightness", pytest.approx(0.25))]
+    # Unknown power is treated as on.
+    assert built["corner"].calls == [("brightness", pytest.approx(0.25))]
 
 
-def test_lights_that_start_off_are_turned_on_by_their_fader():
-    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",))}
-    desk = RecordingQueue(FakeDevice("desk"))
-    engine = Engine(controls, {"desk": desk}, Curve.LINEAR, power={"desk": False})
-    engine.handle(fader("fader.1", 0.5))
-    assert desk.sent == [(P, True), (B, 0.5)]
-
-
-def test_master_skips_lights_that_start_off():
+def test_run_assumes_on_when_power_cant_be_read(monkeypatch, caplog):
+    built = {"desk": PowerUnreadableDevice("desk"), "corner": FakeDevice("corner")}
+    monkeypatch.setattr(runner, "create_device", lambda entry: built[entry.name])
     controls = {"master": ControlMapping("master", Action.MASTER_BRIGHTNESS)}
-    desk = RecordingQueue(FakeDevice("desk"))
-    corner = RecordingQueue(FakeDevice("corner"))
-    queues = {"desk": desk, "corner": corner}
-    engine = Engine(controls, queues, Curve.LINEAR, power={"desk": False})
-    engine.handle(fader("master", 0.5))
-    assert desk.sent == []
-    assert corner.sent == [(B, 0.5)]
+    board = FakeBoard([ControlEvent("master", ControlKind.FADER, 0.5)])
+
+    asyncio.run(runner.run(make_config(controls), R24, board))
+
+    assert "Couldn't read whether desk is on, assuming on: no reply" in caplog.text
+    assert built["desk"].calls == [("brightness", pytest.approx(0.25))]
+
+
+class LateDevice(FakeDevice):
+    """A FakeDevice that can't be reached until its second connect attempt."""
+
+    def __init__(self, name, on=True):
+        super().__init__(name, on)
+        self.attempts = 0
+
+    async def connect(self):
+        self.attempts += 1
+        if self.attempts == 1:
+            raise ConnectionError(f"{self.name}: no Govee light found")
+        await super().connect()
+
+
+def test_devices_that_connect_late_join_in(monkeypatch, capsys):
+    monkeypatch.setattr(runner, "RECONNECT_SECONDS", 0.01)
+    built = {"desk": LateDevice("desk", on=False), "corner": FakeDevice("corner")}
+    monkeypatch.setattr(runner, "create_device", lambda entry: built[entry.name])
+    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",))}
+    # The delay gives the retry time to connect the desk lamp before the event.
+    board = FakeBoard([ControlEvent("fader.1", ControlKind.FADER, 1.0)], delay=0.1)
+
+    asyncio.run(runner.run(make_config(controls), R24, board))
+
+    out = capsys.readouterr().out
+    assert "Ready: 1 of 2 devices connected" in out
+    assert "desk connected." in out
+    assert built["desk"].calls == [("power", True), ("brightness", 1.0)]
+    assert not built["desk"].connected

@@ -5,14 +5,14 @@ and Behringer X-Touch. Faders send 14-bit pitch bend, one MIDI channel per
 fader. Buttons send note on/off. Encoders send relative control changes.
 
 Classes:
-    MackieBoard: A connected Mackie Control board.
+    MackieBoard: A Mackie Control board, connected now or later.
 
 Functions:
-    find_port: Find a MIDI input port by partial name.
     translate: Convert one MIDI message into a ControlEvent.
 """
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Iterator
 
 import mido
@@ -23,26 +23,9 @@ from decibulb.profiles import BoardProfile
 PITCH_MIN = -8192
 PITCH_SPAN = 16383  # PITCH_MAX (8191) - PITCH_MIN
 ENCODER_SIGN_BIT = 64  # values 1-63 turn clockwise, 65-127 counterclockwise
+PORT_POLL_SECONDS = 2.0
 
-
-def find_port(match: str) -> str:
-    """Return the first MIDI input port whose name contains `match`.
-
-    Args:
-        match: Text to look for in the port name, e.g. "R24 MIDI".
-
-    Returns:
-        The full port name.
-
-    Raises:
-        OSError: If no connected port matches.
-    """
-    ports = mido.get_input_names()
-    for name in ports:
-        if match in name:
-            return name
-    connected = ", ".join(ports) or "none"
-    raise OSError(f"No MIDI input matching {match!r}. Connected: {connected}")
+logger = logging.getLogger(__name__)
 
 
 def translate(msg: mido.Message, profile: BoardProfile) -> ControlEvent | None:
@@ -76,26 +59,38 @@ def translate(msg: mido.Message, profile: BoardProfile) -> ControlEvent | None:
 
 
 class MackieBoard:
-    """A connected Mackie Control board.
+    """A Mackie Control board, connected now or later.
 
     Attributes:
         profile: Names for the board's controls.
-        port_name: The MIDI input port being read.
+        port_name: Exact MIDI port to use, or None to use the first port
+            whose name contains profile.port_match.
     """
 
     def __init__(self, profile: BoardProfile, port_name: str | None = None) -> None:
-        """Locate the board's MIDI port.
+        """Set up the board. Nothing is opened until read() or listen().
 
         Args:
             profile: Names for the board's controls.
-            port_name: Exact port to open. If None, the first port containing
-                profile.port_match is used.
-
-        Raises:
-            OSError: If port_name is None and no matching port is found.
+            port_name: Exact port to open. If None, the port is found by
+                profile.port_match each time the board is opened.
         """
         self.profile = profile
-        self.port_name = port_name or find_port(profile.port_match)
+        self.port_name = port_name
+
+    def find_port(self) -> str:
+        """Return the board's MIDI port name.
+
+        Raises:
+            OSError: If the board isn't connected. The message lists the
+                ports that are.
+        """
+        port = self._available_port()
+        if port is None:
+            wanted = self.port_name or self.profile.port_match
+            connected = ", ".join(mido.get_input_names()) or "none"
+            raise OSError(f"No MIDI input matching {wanted!r}. Connected: {connected}")
+        return port
 
     def read(self) -> Iterator[tuple[mido.Message, ControlEvent | None]]:
         """Yield every message from the board with its translated event.
@@ -105,19 +100,49 @@ class MackieBoard:
         Yields:
             (message, event) pairs. The event is None when translate()
             produces no event.
+
+        Raises:
+            OSError: If the board isn't connected.
         """
-        with mido.open_input(self.port_name) as port:
+        with mido.open_input(self.find_port()) as port:
             for msg in port:
                 yield msg, translate(msg, self.profile)
 
-    async def listen(self) -> AsyncIterator[tuple[mido.Message, ControlEvent | None]]:
-        """Async version of read() that doesn't block the event loop.
+    async def listen(
+        self, poll_seconds: float = PORT_POLL_SECONDS
+    ) -> AsyncIterator[tuple[mido.Message, ControlEvent | None]]:
+        """Yield messages like read(), surviving the board coming and going.
 
-        Stops and closes the port when the caller's task is cancelled.
+        Waits for the board if it isn't connected yet, and waits for it to
+        come back if it disappears, such as when it's turned off. Runs until
+        the caller's task is cancelled.
+
+        Args:
+            poll_seconds: How often to check whether the board is connected.
 
         Yields:
             (message, event) pairs, the same as read().
         """
+        waiting_logged = False
+        while True:
+            port = self._available_port()
+            if port is None:
+                if not waiting_logged:
+                    logger.warning("Waiting for %s to be connected...", self.profile.name)
+                    waiting_logged = True
+                await asyncio.sleep(poll_seconds)
+                continue
+
+            waiting_logged = False
+            print(f"{self.profile.name} connected on {port}.")
+            async for item in self._listen_until_gone(port, poll_seconds):
+                yield item
+            logger.warning("%s disconnected.", self.profile.name)
+
+    async def _listen_until_gone(
+        self, port: str, poll_seconds: float
+    ) -> AsyncIterator[tuple[mido.Message, ControlEvent | None]]:
+        """Yield messages from `port` until it disappears."""
         loop = asyncio.get_running_loop()
         messages: asyncio.Queue[mido.Message] = asyncio.Queue()
 
@@ -125,7 +150,20 @@ class MackieBoard:
             # Runs on the MIDI library's own thread, so hand off to the event loop.
             loop.call_soon_threadsafe(messages.put_nowait, msg)
 
-        with mido.open_input(self.port_name, callback=on_message):
+        with mido.open_input(port, callback=on_message):
             while True:
-                msg = await messages.get()
+                try:
+                    msg = await asyncio.wait_for(messages.get(), poll_seconds)
+                except TimeoutError:
+                    # A board that's turned off sends no error, it just goes quiet.
+                    if port not in mido.get_input_names():
+                        return
+                    continue
                 yield msg, translate(msg, self.profile)
+
+    def _available_port(self) -> str | None:
+        """Return the port to open if the board is connected, otherwise None."""
+        ports = mido.get_input_names()
+        if self.port_name is not None:
+            return self.port_name if self.port_name in ports else None
+        return next((name for name in ports if self.profile.port_match in name), None)

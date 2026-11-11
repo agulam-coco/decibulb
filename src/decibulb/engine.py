@@ -100,6 +100,18 @@ class Engine:
         power = power or {}
         self._power = {name: power.get(name, True) for name in queues}
 
+    def add_device(self, name: str, queue: DeviceQueue, on: bool = True) -> None:
+        """Start controlling a device that connected after the engine started.
+
+        Args:
+            name: The device's name from the config.
+            queue: A running DeviceQueue for the device.
+            on: Whether the device is on right now.
+        """
+        self._queues[name] = queue
+        self._levels[name] = 1.0
+        self._power[name] = on
+
     def handle(self, event: ControlEvent) -> None:
         """Apply one event.
 

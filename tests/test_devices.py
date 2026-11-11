@@ -73,3 +73,7 @@ def test_fake_device_reports_its_power_state():
 
     assert asyncio.run(scenario()) == (False, True)
     assert lamp.calls == [("power", True)]
+
+
+def test_effective_value_defaults_to_the_value():
+    assert PowerOnlyDevice("plug").effective_value(Capability.BRIGHTNESS, 0.123) == 0.123

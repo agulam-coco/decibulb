@@ -12,6 +12,7 @@ from bleak.exc import BleakBluetoothNotAvailableError, BleakBluetoothNotAvailabl
 from govee_ble_local import GoveeBleConnectionError, GoveeBleError
 
 from decibulb.devices import govee_ble
+from decibulb.devices.base import Capability
 from decibulb.devices.govee_ble import GoveeBleBulb, brightness_to_percent
 
 ADDRESS = "AA:BB:CC:00:00:01"
@@ -154,3 +155,26 @@ def test_read_power_errors_become_connection_errors(library_bulb):
 
     with pytest.raises(ConnectionError, match="desk_lamp: no reply"):
         asyncio.run(scenario())
+
+
+def test_effective_value_matches_what_the_light_shows(library_bulb):
+    async def scenario():
+        async with GoveeBleBulb("desk_lamp", ADDRESS) as lamp:
+            return [
+                lamp.effective_value(Capability.BRIGHTNESS, 0.504),
+                lamp.effective_value(Capability.COLOR_TEMP, 4618),
+                lamp.effective_value(Capability.COLOR_TEMP, 9000),
+                lamp.effective_value(Capability.COLOR, (255, 0, 0)),
+                lamp.effective_value(Capability.POWER, True),
+            ]
+
+    assert asyncio.run(scenario()) == [50, 4600, 6500, (255, 0, 0), True]
+
+
+def test_color_temp_is_rounded_before_sending(library_bulb):
+    async def scenario():
+        async with GoveeBleBulb("desk_lamp", ADDRESS) as lamp:
+            await lamp.set_color_temp(4618)
+
+    asyncio.run(scenario())
+    library_bulb.set_color_temp.assert_awaited_once_with(4600)

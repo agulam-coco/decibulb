@@ -25,6 +25,20 @@ class BrokenDevice(FakeDevice):
         raise ConnectionError("link lost")
 
 
+class FlakyDevice(FakeDevice):
+    """A FakeDevice whose first brightness change fails."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self.failed = False
+
+    async def set_brightness(self, level: float) -> None:
+        if not self.failed:
+            self.failed = True
+            raise ConnectionError("link lost")
+        await super().set_brightness(level)
+
+
 class TimedDevice(FakeDevice):
     """A FakeDevice that records when each command starts."""
 
@@ -180,3 +194,52 @@ def test_commands_in_one_batch_are_paced_too():
     run_queue(lamp, scenario, min_interval=0.1)
     assert sorted(lamp.calls) == [("brightness", 0.5), ("color", (255, 0, 0))]
     assert lamp.starts[1] - lamp.starts[0] >= 0.09
+
+
+class RoundingDevice(TimedDevice):
+    """A TimedDevice that, like a real bulb, only has whole-percent brightness."""
+
+    def effective_value(self, capability, value):
+        if capability is Capability.BRIGHTNESS:
+            return round(value * 100)
+        return value
+
+
+def test_commands_that_change_nothing_are_skipped():
+    lamp = RoundingDevice("lamp")
+
+    async def scenario(queue):
+        for level in (0.501, 0.502, 0.504, 0.51):
+            queue.submit(Capability.BRIGHTNESS, level)
+            await queue.wait_idle()
+
+    run_queue(lamp, scenario)
+    assert lamp.calls == [("brightness", 0.501), ("brightness", 0.51)]
+
+
+def test_skipped_commands_dont_use_up_a_turn():
+    lamp = RoundingDevice("lamp")
+
+    async def scenario(queue):
+        queue.submit(Capability.BRIGHTNESS, 0.5)
+        await queue.wait_idle()
+        queue.submit(Capability.BRIGHTNESS, 0.501)
+        await queue.wait_idle()
+
+    started = time.monotonic()
+    run_queue(lamp, scenario, min_interval=0.3)
+    assert time.monotonic() - started < 0.2
+
+
+def test_failed_commands_are_retried_with_the_same_value(caplog):
+    lamp = FlakyDevice("lamp")
+
+    async def scenario(queue):
+        queue.submit(Capability.BRIGHTNESS, 0.5)
+        await queue.wait_idle()
+        queue.submit(Capability.BRIGHTNESS, 0.5)
+
+    with caplog.at_level(logging.WARNING):
+        run_queue(lamp, scenario)
+    assert "lamp: link lost" in caplog.text
+    assert lamp.calls == [("brightness", 0.5)]

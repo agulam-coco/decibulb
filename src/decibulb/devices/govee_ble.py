@@ -13,6 +13,7 @@ Functions:
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any
 
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
@@ -33,6 +34,7 @@ from decibulb.devices.base import Capability, Device
 DEFAULT_SCAN_TIMEOUT = 10.0
 MIN_PERCENT = 1  # Govee rejects 0%; turning a light off is set_power(False).
 MAX_PERCENT = 100
+KELVIN_STEP = 50  # smaller color temperature changes aren't visible
 
 
 async def discover_bulbs(timeout: float = DEFAULT_SCAN_TIMEOUT) -> list[DiscoveredDevice]:
@@ -158,6 +160,14 @@ class GoveeBleBulb(Device):
         bulb, self._bulb = self._bulb, None
         await bulb.stop()
 
+    def effective_value(self, capability: Capability, value: Any) -> Any:
+        """Return the value after Govee's rounding: whole percents and 50 K steps."""
+        if capability is Capability.BRIGHTNESS:
+            return brightness_to_percent(value)
+        if capability is Capability.COLOR_TEMP:
+            return self._kelvin(value)
+        return value
+
     async def read_power(self) -> bool | None:
         """Read whether the light is on. None if the light didn't say."""
         with self._translate_errors():
@@ -180,10 +190,16 @@ class GoveeBleBulb(Device):
             await self._connected().set_rgb(rgb)
 
     async def set_color_temp(self, kelvin: int) -> None:
-        """Set a white color temperature, clamped to the light's supported range."""
+        """Set a white color temperature, rounded and clamped to the light's range."""
         with self._translate_errors():
-            bulb = self._connected()
-            await bulb.set_color_temp(max(bulb.min_kelvin, min(bulb.max_kelvin, kelvin)))
+            await self._connected().set_color_temp(self._kelvin(kelvin))
+
+    def _kelvin(self, kelvin: int) -> int:
+        """Round to KELVIN_STEP, then clamp to the light's range once connected."""
+        rounded = round(kelvin / KELVIN_STEP) * KELVIN_STEP
+        if self._bulb is None:
+            return rounded
+        return max(self._bulb.min_kelvin, min(self._bulb.max_kelvin, rounded))
 
     def _connected(self) -> GoveeDevice:
         """Return the library device, or raise if connect() hasn't run."""

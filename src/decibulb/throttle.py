@@ -5,7 +5,8 @@ about 3 changes a second. Instead of queueing every value, each device
 keeps only the newest pending value per kind of command and sends it when
 the device is ready: once its previous command finished and at least
 min_interval has passed since that command started. Values in between
-are skipped.
+are skipped, and so is any command that wouldn't change what the device
+is showing.
 
 Classes:
     DeviceQueue: Command queue for one device that drops outdated values.
@@ -59,6 +60,7 @@ class DeviceQueue:
         self.device = device
         self.min_interval = min_interval
         self._last_send = float("-inf")
+        self._applied: dict[Capability, Any] = {}
         self._pending: dict[Capability, _Pending] = {}
         self._wake = asyncio.Event()
         self._idle = asyncio.Event()
@@ -87,14 +89,25 @@ class DeviceQueue:
         while True:
             await self._wake.wait()
             self._wake.clear()
-            while self._pending:
+            while self._drop_unchanged():
                 # Wait before taking the batch so the newest values are sent.
                 await self._wait_turn()
                 batch, self._pending = self._pending, {}
                 for capability, (value, submitted) in _in_send_order(batch):
+                    effective = self.device.effective_value(capability, value)
+                    if self._applied.get(capability) == effective:
+                        continue
                     await self._wait_turn()
-                    await self._send(capability, value, submitted)
+                    if await self._send(capability, value, submitted):
+                        self._applied[capability] = effective
             self._idle.set()
+
+    def _drop_unchanged(self) -> bool:
+        """Drop pending commands that wouldn't change anything. Return True if any remain."""
+        for capability, (value, _submitted) in list(self._pending.items()):
+            if self._applied.get(capability) == self.device.effective_value(capability, value):
+                del self._pending[capability]
+        return bool(self._pending)
 
     async def _wait_turn(self) -> None:
         """Sleep until min_interval has passed since the last command started."""
@@ -102,14 +115,14 @@ class DeviceQueue:
         if delay > 0:
             await asyncio.sleep(delay)
 
-    async def _send(self, capability: Capability, value: Any, submitted: float) -> None:
-        """Send one command, logging failures instead of raising them."""
+    async def _send(self, capability: Capability, value: Any, submitted: float) -> bool:
+        """Send one command. Return False if it failed, logging why."""
         started = self._last_send = time.monotonic()
         try:
             await getattr(self.device, _SETTERS[capability])(value)
         except (ConnectionError, UnsupportedActionError) as err:
             logger.warning("%s: %s", self.device.name, err)
-            return
+            return False
         finished = time.monotonic()
         shown = f"{value:.2f}" if isinstance(value, float) else value
         took = finished - started
@@ -128,6 +141,7 @@ class DeviceQueue:
                 capability.value,
                 took,
             )
+        return True
 
 
 def _in_send_order(batch: dict[Capability, _Pending]) -> list[tuple[Capability, _Pending]]:

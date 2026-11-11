@@ -12,7 +12,7 @@ Classes:
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Self
+from typing import Any, Self
 
 
 class Capability(Enum):
@@ -65,6 +65,23 @@ class Device(ABC):
     @abstractmethod
     async def close(self) -> None:
         """Close the connection. Safe to call more than once."""
+
+    def effective_value(self, capability: Capability, value: Any) -> Any:
+        """Return the value the device would actually apply for a command.
+
+        Two commands with the same effective value look the same, so the
+        second can be skipped. Plugins whose hardware rounds values, such
+        as bulbs with 100 brightness levels, override this.
+
+        Args:
+            capability: Kind of command.
+            value: Argument for the matching set_* method.
+
+        Returns:
+            `value` after the device's own rounding. The default returns
+            `value` unchanged.
+        """
+        return value
 
     async def read_power(self) -> bool | None:
         """Ask the device whether it's on.

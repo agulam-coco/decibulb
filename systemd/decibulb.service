@@ -1,0 +1,28 @@
+# systemd service for decibulb. Starts on boot and restarts if it crashes.
+#
+# Edit User, WorkingDirectory, and ExecStart if your username or clone
+# location isn't pi and ~/decibulb. Install with:
+#   sudo cp systemd/decibulb.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now decibulb
+
+[Unit]
+Description=decibulb: control lights from a mixer
+Wants=bluetooth.target
+After=bluetooth.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/decibulb
+ExecStart=/home/pi/decibulb/.venv/bin/decibulb run
+# Show print() output in the journal right away instead of in chunks.
+Environment=PYTHONUNBUFFERED=1
+# Stop like Ctrl+C, so the last values are sent and the lights disconnect cleanly.
+KillSignal=SIGINT
+TimeoutStopSec=10
+# Bluetooth may not be ready yet at boot; try again instead of giving up.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

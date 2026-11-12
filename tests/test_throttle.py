@@ -22,7 +22,7 @@ class BrokenDevice(FakeDevice):
     """A FakeDevice whose brightness changes always fail."""
 
     async def set_brightness(self, level: float) -> None:
-        raise ConnectionError("link lost")
+        raise ConnectionError(f"{self.name}: link lost")
 
 
 class FlakyDevice(FakeDevice):
@@ -35,7 +35,7 @@ class FlakyDevice(FakeDevice):
     async def set_brightness(self, level: float) -> None:
         if not self.failed:
             self.failed = True
-            raise ConnectionError("link lost")
+            raise ConnectionError(f"{self.name}: link lost")
         await super().set_brightness(level)
 
 
@@ -243,3 +243,36 @@ def test_failed_commands_are_retried_with_the_same_value(caplog):
         run_queue(lamp, scenario)
     assert "lamp: link lost" in caplog.text
     assert lamp.calls == [("brightness", 0.5)]
+
+
+def test_queue_stops_when_the_device_is_lost(caplog):
+    lamp = BrokenDevice("lamp")
+
+    async def main():
+        queue = DeviceQueue(lamp, 0)
+        task = asyncio.create_task(queue.run())
+        for level in (0.1, 0.2, 0.3):
+            queue.submit(Capability.BRIGHTNESS, level)
+            await asyncio.sleep(0.01)
+        await asyncio.wait_for(task, 1)  # returns on its own, no cancel needed
+
+    with caplog.at_level(logging.WARNING):
+        asyncio.run(main())
+    assert caplog.text.count("lamp: link lost") == throttle.MAX_FAILURES
+
+
+def test_a_success_resets_the_failure_count():
+    lamp = FlakyDevice("lamp")
+
+    async def scenario(queue):
+        queue.submit(Capability.BRIGHTNESS, 0.1)  # fails
+        await queue.wait_idle()
+        queue.submit(Capability.BRIGHTNESS, 0.2)  # works
+        await queue.wait_idle()
+        lamp.failed = False
+        queue.submit(Capability.BRIGHTNESS, 0.3)  # fails again, but not twice in a row
+        await queue.wait_idle()
+        queue.submit(Capability.BRIGHTNESS, 0.4)
+
+    run_queue(lamp, scenario)
+    assert lamp.calls == [("brightness", 0.2), ("brightness", 0.4)]

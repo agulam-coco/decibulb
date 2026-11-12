@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from decibulb import runner
+from decibulb import runner, throttle
 from decibulb.config import Action, Config, ConfigError, ControlMapping, DeviceConfig
 from decibulb.devices.base import Capability
 from decibulb.devices.fake import FakeDevice
@@ -186,3 +186,43 @@ def test_devices_that_connect_late_join_in(monkeypatch, capsys):
     assert "desk connected." in out
     assert built["desk"].calls == [("power", True), ("brightness", 1.0)]
     assert not built["desk"].connected
+
+
+class DroppingDevice(FakeDevice):
+    """A FakeDevice that stops responding after its first brightness change."""
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.connects = 0
+        self.broken = False
+
+    async def connect(self):
+        self.connects += 1
+        self.broken = False
+        await super().connect()
+
+    async def set_brightness(self, level):
+        if self.broken:
+            raise ConnectionError(f"{self.name}: device disappeared")
+        await super().set_brightness(level)
+        if self.connects == 1:
+            self.broken = True
+
+
+def test_devices_that_stop_responding_are_reconnected(monkeypatch, caplog):
+    monkeypatch.setattr(runner, "RECONNECT_SECONDS", 0.01)
+    monkeypatch.setattr(throttle, "MIN_SEND_INTERVAL", 0)
+    built = {"desk": DroppingDevice("desk"), "corner": FakeDevice("corner")}
+    monkeypatch.setattr(runner, "create_device", lambda entry: built[entry.name])
+    controls = {"fader.1": ControlMapping("fader.1", Action.BRIGHTNESS, ("desk",))}
+    levels = (0.2, 0.4, 0.6, 1.0)  # works, fails, fails (lost), works after reconnecting
+    board = FakeBoard([ControlEvent("fader.1", ControlKind.FADER, v) for v in levels], delay=0.1)
+
+    asyncio.run(runner.run(make_config(controls), R24, board))
+
+    assert "desk stopped responding. Will keep trying to reconnect." in caplog.text
+    assert built["desk"].connects == 2
+    assert built["desk"].calls == [
+        ("brightness", pytest.approx(0.2**2)),
+        ("brightness", pytest.approx(1.0)),
+    ]

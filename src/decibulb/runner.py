@@ -76,9 +76,9 @@ def check_controls(config: Config, profile: BoardProfile, devices: dict[str, Dev
 async def run(config: Config, profile: BoardProfile, board: Board) -> None:
     """Connect everything and handle events until the board stops or the task is cancelled.
 
-    Devices that fail to connect are retried in the background and join in
-    when they connect. On exit, the last values are sent before devices
-    disconnect.
+    Devices that fail to connect, or stop responding later, are retried in
+    the background and rejoin when they connect. On exit, the last values
+    are sent before devices disconnect.
 
     Args:
         config: The loaded config.
@@ -94,16 +94,25 @@ async def run(config: Config, profile: BoardProfile, board: Board) -> None:
 
     connected = await _connect_all(devices)
     power = {name: await _read_power(name, device) for name, device in connected.items()}
-    queues = {name: DeviceQueue(device) for name, device in connected.items()}
-    workers = [asyncio.create_task(queue.run()) for queue in queues.values()]
-    engine = Engine(config.controls, queues, config.brightness_curve, power)
+    queues: dict[str, DeviceQueue] = {}
+    workers: list[asyncio.Task] = []
+    engine = Engine(config.controls, queues, config.brightness_curve)
+    missing = {name: device for name, device in devices.items() if name not in connected}
+
+    async def work(name: str, device: Device, queue: DeviceQueue) -> None:
+        await queue.run()  # returns only if the device stops responding
+        engine.remove_device(name)
+        await device.close()
+        missing[name] = device
+        logger.warning("%s stopped responding. Will keep trying to reconnect.", name)
 
     def start(name: str, device: Device) -> None:
         queue = DeviceQueue(device)
-        workers.append(asyncio.create_task(queue.run()))
+        workers.append(asyncio.create_task(work(name, device, queue)))
         engine.add_device(name, queue, power[name])
 
-    missing = {name: device for name, device in devices.items() if name not in connected}
+    for name, device in connected.items():
+        start(name, device)
     retrying = asyncio.create_task(_keep_connecting(missing, power, start))
 
     print(f"Ready: {len(connected)} of {len(devices)} devices connected. Press Ctrl+C to stop.")
@@ -136,8 +145,11 @@ async def _keep_connecting(
     power: dict[str, bool],
     start: Callable[[str, Device], None],
 ) -> None:
-    """Retry missing devices until all connect, calling start() for each one."""
-    while missing:
+    """Retry missing devices forever, calling start() for each one that connects.
+
+    `missing` is shared with run(), which adds devices that drop out later.
+    """
+    while True:
         await asyncio.sleep(RECONNECT_SECONDS)
         for name, device in list(missing.items()):
             try:

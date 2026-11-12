@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # they can show builds a backlog inside the bulb. 0.3 s found by testing.
 MIN_SEND_INTERVAL = 0.3
 SLOW_COMMAND_SECONDS = 1.0  # a healthy Bluetooth command takes about 0.1 s
+# The library already retries each command 3 times, so 2 failures in a row
+# means the device is gone rather than a one-off dropped reply.
+MAX_FAILURES = 2
 
 _Pending = tuple[Any, float]  # (value, time.monotonic() when submitted)
 
@@ -48,18 +51,20 @@ class DeviceQueue:
         min_interval: Fewest seconds between the starts of two commands.
     """
 
-    def __init__(self, device: Device, min_interval: float = MIN_SEND_INTERVAL) -> None:
+    def __init__(self, device: Device, min_interval: float | None = None) -> None:
         """Create an empty queue for `device`.
 
         Args:
             device: The device commands are sent to. Must already be connected
                 before run() sends anything.
             min_interval: Fewest seconds between the starts of two commands.
-                0 sends as fast as the device acknowledges.
+                0 sends as fast as the device acknowledges. Defaults to
+                MIN_SEND_INTERVAL.
         """
         self.device = device
-        self.min_interval = min_interval
+        self.min_interval = MIN_SEND_INTERVAL if min_interval is None else min_interval
         self._last_send = float("-inf")
+        self._failures = 0
         self._applied: dict[Capability, Any] = {}
         self._pending: dict[Capability, _Pending] = {}
         self._wake = asyncio.Event()
@@ -82,24 +87,35 @@ class DeviceQueue:
         await self._idle.wait()
 
     async def run(self) -> None:
-        """Send queued commands until cancelled.
+        """Send queued commands until cancelled or the device is lost.
 
-        Errors from the device are logged and don't stop the queue.
+        Errors from the device are logged. After MAX_FAILURES failed
+        commands in a row, the device is treated as lost: pending commands
+        are dropped and run() returns.
         """
-        while True:
-            await self._wake.wait()
-            self._wake.clear()
-            while self._drop_unchanged():
-                # Wait before taking the batch so the newest values are sent.
-                await self._wait_turn()
-                batch, self._pending = self._pending, {}
-                for capability, (value, submitted) in _in_send_order(batch):
-                    effective = self.device.effective_value(capability, value)
-                    if self._applied.get(capability) == effective:
-                        continue
+        try:
+            while True:
+                await self._wake.wait()
+                self._wake.clear()
+                while self._drop_unchanged():
+                    # Wait before taking the batch so the newest values are sent.
                     await self._wait_turn()
-                    if await self._send(capability, value, submitted):
-                        self._applied[capability] = effective
+                    batch, self._pending = self._pending, {}
+                    for capability, (value, submitted) in _in_send_order(batch):
+                        effective = self.device.effective_value(capability, value)
+                        if self._applied.get(capability) == effective:
+                            continue
+                        await self._wait_turn()
+                        if await self._send(capability, value, submitted):
+                            self._applied[capability] = effective
+                            self._failures = 0
+                        else:
+                            self._failures += 1
+                            if self._failures >= MAX_FAILURES:
+                                return
+                self._idle.set()
+        finally:
+            self._pending.clear()
             self._idle.set()
 
     def _drop_unchanged(self) -> bool:
@@ -121,7 +137,7 @@ class DeviceQueue:
         try:
             await getattr(self.device, _SETTERS[capability])(value)
         except (ConnectionError, UnsupportedActionError) as err:
-            logger.warning("%s: %s", self.device.name, err)
+            logger.warning("%s", err)  # device errors already start with the name
             return False
         finished = time.monotonic()
         shown = f"{value:.2f}" if isinstance(value, float) else value

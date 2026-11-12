@@ -101,7 +101,7 @@ class Engine:
         self._power = {name: power.get(name, True) for name in queues}
 
     def add_device(self, name: str, queue: DeviceQueue, on: bool = True) -> None:
-        """Start controlling a device that connected after the engine started.
+        """Start controlling a device, or resume one that reconnected.
 
         Args:
             name: The device's name from the config.
@@ -109,8 +109,16 @@ class Engine:
             on: Whether the device is on right now.
         """
         self._queues[name] = queue
-        self._levels[name] = 1.0
+        self._levels.setdefault(name, 1.0)  # keep the fader level from before a reconnect
         self._power[name] = on
+
+    def remove_device(self, name: str) -> None:
+        """Stop controlling a device, such as one that disconnected.
+
+        Args:
+            name: The device's name from the config.
+        """
+        self._queues.pop(name, None)
 
     def handle(self, event: ControlEvent) -> None:
         """Apply one event.
@@ -158,9 +166,9 @@ class Engine:
         self._submit(name, Capability.BRIGHTNESS, self._brightness(name))
 
     def _set_master(self, master: float) -> None:
-        """Rescale every light that's on."""
+        """Rescale every connected light that's on."""
         self.master = master
-        for name in self._levels:
+        for name in self._queues:
             if self._power[name]:
                 self._submit(name, Capability.BRIGHTNESS, self._brightness(name))
 

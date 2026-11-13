@@ -4,7 +4,7 @@
 
 Turn an old mixer into a light switch.
 
-VIDEO-GOES-HERE
+https://github.com/user-attachments/assets/5dd3f703-da2c-4fe7-bc86-e792c07a16d9
 
 Plug a mixer or MIDI controller into a Raspberry Pi (or any Linux computer), and its faders control your lights, your speakers, and eventually anything else in your smart home.
 

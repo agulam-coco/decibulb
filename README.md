@@ -1,16 +1,19 @@
+<div align="center">
+
 # decibulb
 
+**Turn an old mixer into a light switch.**
+
 [![tests](https://github.com/agulam-coco/decibulb/actions/workflows/tests.yml/badge.svg)](https://github.com/agulam-coco/decibulb/actions/workflows/tests.yml)
+[![release](https://img.shields.io/github/v/release/agulam-coco/decibulb)](https://github.com/agulam-coco/decibulb/releases)
+[![license](https://img.shields.io/github/license/agulam-coco/decibulb)](LICENSE)
 
-Turn an old mixer into a light switch.
+<img src="docs/demo.webp" alt="Sliding a fader on a Zoom R24 while the room's lights change color" width="360">
 
-<p align="center">
-  <img src="docs/demo.webp" alt="Sliding a fader on a Zoom R24 while the room's lights change color" width="400">
-</p>
+Plug a mixer or MIDI controller into a Raspberry Pi (or any Linux computer),<br>
+and its faders control your lights, your speakers, and eventually anything else in your smart home.
 
-Plug a mixer or MIDI controller into a Raspberry Pi (or any Linux computer), and its faders control your lights, your speakers, and eventually anything else in your smart home.
-
-**v0.1.0:** faders and buttons control Govee Bluetooth bulbs, and it runs on boot. Controlling room volume is next.
+</div>
 
 ## How it works
 

@@ -4,7 +4,9 @@
 
 Turn an old mixer into a light switch.
 
-https://github.com/user-attachments/assets/5dd3f703-da2c-4fe7-bc86-e792c07a16d9
+<p align="center">
+  <img src="docs/demo.webp" alt="Sliding a fader on a Zoom R24 while the room's lights change color" width="400">
+</p>
 
 Plug a mixer or MIDI controller into a Raspberry Pi (or any Linux computer), and its faders control your lights, your speakers, and eventually anything else in your smart home.
 
@@ -263,84 +265,4 @@ If your board speaks Mackie Control, you can add it without writing code:
 1. Run `decibulb monitor --raw` and move every control. Write down the channel or note each one sends.
 2. Copy `src/decibulb/profiles/zoom-r24.yaml` to `src/decibulb/profiles/<your-board>.yaml` and fill in your numbers.
 3. Run `decibulb monitor --profile <your-board>` to check it.
-4. Run `pytest`. Every profile is checked automatically.
-
-Support for plain MIDI CC controllers (Korg nanoKONTROL, Akai MIDImix, and similar) is planned.
-
-## Development
-
-```bash
-pip install -e ".[dev]"
-pytest
-```
-
-The tests use real MIDI values captured from a Zoom R24, fake boards and devices, and a mocked Bluetooth library, so no hardware is needed to run them.
-
-To test with your real lights but without the board, `scripts/lag_test.py` plays a set of fader moves through the same code as `decibulb run`:
-
-```bash
-python scripts/lag_test.py -vv 2>&1 | tee lag.log
-```
-
-## Project layout
-
-```
-decibulb/
-├── .github/workflows/
-│   └── tests.yml               runs pytest on every push
-├── pyproject.toml              install settings, dependencies, the decibulb command
-├── config.example.yaml         starting point for your config.yaml
-├── README.md
-├── LICENSE
-├── src/decibulb/
-│   ├── __init__.py             package version
-│   ├── cli.py                  the decibulb command
-│   ├── events.py               the standard ControlEvent every board produces
-│   ├── profiles.py             loads board profiles
-│   ├── profiles/
-│   │   └── zoom-r24.yaml       control names for the Zoom R24
-│   ├── boards/
-│   │   └── mackie.py           reads Mackie Control boards
-│   ├── devices/
-│   │   ├── base.py             the Device base class every device plugin follows
-│   │   ├── fake.py             a pretend device for tests and demo mode
-│   │   ├── govee_ble.py        Govee lights over Bluetooth
-│   │   └── registry.py         turns a config entry into a device
-│   ├── config.py               loads and checks config.yaml
-│   ├── engine.py               turns events into device commands
-│   ├── throttle.py             per-device send queue that keeps only the newest value
-│   └── runner.py               connects everything for decibulb run
-├── scripts/
-│   └── lag_test.py             replays fader moves against real lights
-├── systemd/
-│   └── decibulb.service        runs decibulb on boot
-└── tests/
-    ├── test_cli.py
-    ├── test_config.py
-    ├── test_devices.py
-    ├── test_engine.py
-    ├── test_govee_ble.py
-    ├── test_mackie.py
-    ├── test_profiles.py
-    ├── test_runner.py
-    └── test_throttle.py
-```
-
-## Roadmap
-
-- [x] Read the Zoom R24 over Mackie Control
-- [x] `decibulb monitor`
-- [x] Govee Bluetooth device plugin
-- [x] `decibulb discover`: find lights and blink them to tell which is which
-- [x] Config file and `decibulb run`: faders control lights
-- [x] Read each light's real on/off state when decibulb starts
-- [x] Skip commands that wouldn't change the light
-- [x] Wait for the board and retry missing lights in the background
-- [x] Run as a service so it starts on boot
-- [x] Tests on GitHub Actions, demo, v0.1.0 release
-- [ ] Room volume: Alexa plays through the Pi, one fader sets the volume
-- [ ] Home Assistant and MQTT devices, plain MIDI CC boards
-
-## License
-
-MIT
+4. Run `pytest`. Every profile is checked

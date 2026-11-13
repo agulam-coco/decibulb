@@ -1,10 +1,14 @@
 # decibulb
 
+[![tests](https://github.com/agulam-coco/decibulb/actions/workflows/tests.yml/badge.svg)](https://github.com/agulam-coco/decibulb/actions/workflows/tests.yml)
+
 Turn an old mixer into a light switch.
 
-Plug a mixer or MIDI controller into a Raspberry Pi, and its faders control your lights, your speakers, and eventually anything else in your smart home.
+<img src="docs/demo.webp" alt="Sliding a fader on a Zoom R24 while the room's lights change color" width="320">
 
-> 🚧 Work in progress. Faders and buttons control Govee Bluetooth bulbs (`decibulb run`). Room volume is next.
+Plug a mixer or MIDI controller into a Raspberry Pi (or any Linux computer), and its faders control your lights, your speakers, and eventually anything else in your smart home.
+
+**v0.1.0:** faders and buttons control Govee Bluetooth bulbs, and it runs on boot. Controlling room volume is next.
 
 ## How it works
 
@@ -29,19 +33,21 @@ Because every board turns into the same events, you can swap mixers or lights wi
 
 ## Requirements
 
-- A Raspberry Pi running Raspberry Pi OS (tested on a Pi 5)
+- A Linux computer with Bluetooth and a free USB port. A Raspberry Pi is the easy pick (tested on a Pi 5 with Raspberry Pi OS), but any Linux machine works: an old laptop, a mini PC, a home server. decibulb only needs BlueZ, the standard Linux Bluetooth stack, which most distros already have.
 - Python 3.11 or newer
 - A Mackie Control board (tested with the Zoom R24)
 - **A real power source for the board.** See [Power](#power) below. This is the most common reason decibulb can't find the board.
-- On Python 3.13 or newer, `python-rtmidi` has to compile, so install the build tools first:
+- On Python 3.13 or newer, `python-rtmidi` has to compile, so install the build tools first. On Raspberry Pi OS, Debian, or Ubuntu:
 
   ```bash
   sudo apt install -y libasound2-dev pkg-config python3-dev build-essential
   ```
 
+  On other distros, install the same things under their names there: the ALSA development headers, pkg-config, the Python headers, and a C compiler.
+
 ## Power
 
-**Give your board its own power if you can.** If the board runs off the Pi's USB port and the Pi can't supply enough, the board never finishes starting up, and decibulb can't see it.
+**Give your board its own power if you can.** If the board runs off your computer's USB port and the port can't supply enough, the board never finishes starting up, and decibulb can't see it. This mostly bites on a Raspberry Pi. A laptop or desktop USB port usually has power to spare.
 
 ### Why
 
@@ -51,8 +57,8 @@ A Pi 5 shares a limited amount of USB power across all its ports (600 mA unless 
 
 - `decibulb monitor` says `No MIDI input matching 'R24 MIDI'` and only lists `Midi Through`
 - `lsusb` doesn't list the board at all
-- `sudo dmesg` shows `Undervoltage detected!` or `over-current change`
-- `vcgencmd get_throttled` prints anything other than `throttled=0x0`
+- `sudo dmesg` shows `over-current change`, or on a Pi, `Undervoltage detected!`
+- On a Pi, `vcgencmd get_throttled` prints anything other than `throttled=0x0`
 
 ### Options, best first
 
@@ -210,7 +216,7 @@ Leave `-v` off for everyday use. Printing dozens of lines a second over SSH can 
 
 ### 5. Start it on boot
 
-`systemd/decibulb.service` runs decibulb as a service: it starts when the Pi boots and restarts if it crashes. It assumes your username is `pi` and the repo is in `~/decibulb`. Edit the `User`, `WorkingDirectory`, and `ExecStart` lines if not.
+`systemd/decibulb.service` runs decibulb as a service: it starts when the computer boots and restarts if it crashes. Raspberry Pi OS and most other Linux distros use systemd. The file assumes your username is `pi` and the repo is in `~/decibulb`. Edit the `User`, `WorkingDirectory`, and `ExecStart` lines if not.
 
 ```bash
 sudo cp systemd/decibulb.service /etc/systemd/system/
@@ -280,6 +286,10 @@ python scripts/lag_test.py -vv 2>&1 | tee lag.log
 
 ```
 decibulb/
+├── .github/workflows/
+│   └── tests.yml               runs pytest on every push
+├── docs/
+│   └── demo.webp               the demo at the top of this README
 ├── pyproject.toml              install settings, dependencies, the decibulb command
 ├── config.example.yaml         starting point for your config.yaml
 ├── README.md
@@ -329,7 +339,7 @@ decibulb/
 - [x] Skip commands that wouldn't change the light
 - [x] Wait for the board and retry missing lights in the background
 - [x] Run as a service so it starts on boot
-- [ ] Tests on GitHub Actions, demo GIF, tag v0.1.0
+- [x] Tests on GitHub Actions, demo, v0.1.0 release
 - [ ] Room volume: Alexa plays through the Pi, one fader sets the volume
 - [ ] Home Assistant and MQTT devices, plain MIDI CC boards
 

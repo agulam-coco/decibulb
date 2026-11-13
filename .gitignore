@@ -8,6 +8,10 @@ dist/
 # Virtual environments
 .venv/
 
-# Local config 
+# Test and tool output
+.pytest_cache/
+*.log
+
+# Local config
 config.yaml
 .env

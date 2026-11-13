@@ -1,21 +1,539 @@
-MIT License
+The lights in my room are smart bulbs and I can control them with Alexa, but sometimes I don't want to talk to anything and I just want the lights a little lower. The only other way was opening the Govee app and going through the menus, which is a lot of steps just to dim a light.
 
-Copyright (c) 2026 Jason Chigabatia
+So I decided to build a light switch for my desk, except instead of a switch it's a mixer. You slide a fader up and a bulb gets brighter, you slide it down and it dims. I also wanted to try and do the whole thing with stuff I already had lying around.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This is the log of me building it as I went. This is where it ended up:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+<video src="/media/projects/mixer-lights/room-clip.mp4" poster="/media/projects/mixer-lights/room-clip-poster.webp" autoPlay muted loop playsInline preload="metadata" className="wu-narrow" aria-label="My hand on the R24's faders while the lamp turns the whole wall red, white, green, and pink" />
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+## The plan
+
+I already have Raspberry Pis running in [my rack](/projects/server-rack), so the idea was to plug a mixer into one of them, have the Pi watch the faders and send that to the bulbs.
+
+I had two mixers I could pick from.
+
+<div className="wu-grid wu-grid-2">
+  <figure>
+    <img src="/media/projects/mixer-lights/r24.webp" alt="Zoom R24 recorder and mixer under red lights" />
+    <figcaption>The Zoom R24, which I hadn't touched in a while</figcaption>
+  </figure>
+  <figure>
+    <img src="/media/projects/mixer-lights/mix12fx.webp" alt="Mackie Mix12FX mixer with a property of Freesound sticker" />
+    <figcaption>The Mackie Mix12FX (this one is Freesound's, not mine)</figcaption>
+  </figure>
+</div>
+
+## Picking a mixer
+
+My first idea was kind of a hack. You play a tone into the mixer and read how loud it comes out the other side, and that tells you where the fader is. Louder tone means a brighter light.
+
+The problem is that these boards only have one main output, so if I wanted more than one bulb I didn't know how I would tell them apart. I thought maybe I could overlay a bunch of tones and separate them after.
+
+I looked it up and that is actually a real thing. You give each channel its own pitch and mix them all together, and then the Pi splits them back up and checks how loud each pitch is. Each pitch would be one bulb. That is how it would have to work on the Mackie since it's fully analog and has no USB at all.
+
+Then I found out the R24 can skip all of that. It's not just a mixer, it's also a USB controller, so when you plug it into a computer every fader sends its own message over USB. Fader 1 can be bulb 1, fader 2 can be bulb 2 and so on, with no tones and no splitting anything apart. Linux also already supports it, so it should show up on the Pi without needing any extra drivers.
+
+So I went with the R24. It's mine, it was already sitting in my room and it makes the whole thing a lot easier. I might still come back to the tone idea at some point.
+
+## Making sure it's actually an R24
+
+I hadn't used it in a while, so I wanted to make sure it was the board I thought it was and not the R16, which looks almost the same. The way to tell is that the R24 has drum pads (the KICK, SNARE and HAT labels under the faders) and bank buttons that go up to 24 tracks. Mine has both, so it's an R24.
+
+The cap on fader 7 is missing. I was thinking of 3D printing a cap for it.
+
+## The power problem
+
+I lost the power adapter for the R24 a while ago. It takes 5V and the official one is the Zoom AD-14.
+
+I found an 18V adapter lying around and thought it might work for one of the boards, but it didn't work for either. It's DC, which is wrong for the Mackie (that one needs 18V AC), and 18V would fry the R24. So that went back in the box.
+
+![The 18V DC adapter that didn't work for either board](/media/projects/mixer-lights/wrong-adapter.webp)
+
+The R24 can run off USB alone when it's being used as a controller, which is the only mode I need. I tested it on my laptop and it worked. When I plugged it into the Pi though, it didn't turn on.
+
+## Figuring out why
+
+I plugged it in and looked at the Pi's logs, and they were full of the same message over and over, hundreds of times.
+
+```
+usb usb3-port1: over-current change #268
+usb usb1-port1: over-current change #268
+usb usb2-port1: over-current change #327
+```
+
+From what I understand, the Pi kept cutting power to the USB ports because the R24 was pulling too much, then trying again, then cutting it again. The Pi itself was fine. `vcgencmd get_throttled` came back as `0x0`, which means it wasn't running low on power.
+
+What I didn't think about is that my Pi runs off PoE through a HAT, not a normal USB-C charger. A Pi 5 only lets the USB ports pull a lot of power when it can tell it's on a big enough charger, and through a HAT it can't tell. So it plays it safe and keeps the ports pretty weak.
+
+There is a setting to lift that limit, but it's only safe if the HAT can actually give that much power. Otherwise you are just moving the problem to the Pi.
+
+## Checking the HAT
+
+So I looked up my HAT. It's a 52Pi P33, which does PoE and also holds an NVMe drive, and it's rated for 5.1V at 4.5A.
+
+![The 52Pi PoE+ HAT on my Pi, with the NVMe drive on top](/media/projects/mixer-lights/poe-hat.webp)
+
+I did the math on everything it has to power. The Pi 5 pulls about 2.4A maxed out and more like 1A normally. The NVMe drive is about 0.6A maxed out and around 0.2A normally. The USB ports can go up to 1.6A with the limit lifted, but the R24 only needs about 1A. All together that's about 4.6A if everything is maxed out at the same time and about 2.2A normally.
+
+That worst case would only happen if everything maxed out at once, which I don't think happens with just a mixer plugged in. Normally I would be using about half of what the HAT can give.
+
+The HAT also only gets its full power if the switch does PoE+ and not plain PoE. I checked and mine does PoE+.
+
+That meant I didn't have to buy anything, no new adapter and no USB hub. It was just one line in the Pi's config.
+
+```
+usb_max_current_enable=1
+```
+
+That goes at the bottom of `/boot/firmware/config.txt`, and then you reboot.
+
+## It turned on
+
+I added the line, rebooted the Pi and plugged the R24 back in. This time the screen lit up and stayed on, running just off the Pi with no adapter and no batteries.
+
+<div className="wu-grid wu-grid-2">
+  <figure>
+    <img src="/media/projects/mixer-lights/screen-on.webp" alt="The R24 with its screen lit up" />
+    <figcaption>Finally a screen</figcaption>
+  </figure>
+  <figure>
+    <img src="/media/projects/mixer-lights/usb-port.webp" alt="USB cable plugged into the R24's device port with the light on" />
+    <figcaption>Powered off the Pi through this one cable</figcaption>
+  </figure>
+</div>
+
+I checked the logs again and all of the over-current messages were gone, and the Pi was still fine.
+
+```
+pi@rabbit:~ $ vcgencmd get_throttled
+throttled=0x0
+```
+
+The logs also confirmed my Pi is a Pi 5, which I had only been guessing up to this point.
+
+At this point the R24 was sitting on its USB menu asking if I wanted it to be an audio interface or an SD card reader. It doesn't actually talk to the Pi until you pick one, so that was next.
+
+![The R24's USB menu showing AUDIO I/F and READER](/media/projects/mixer-lights/usb-menu.webp)
+
+![The R24 on my desk next to the rack](/media/projects/mixer-lights/desk.webp)
+
+*Its new home, right next to the rack.*
+
+## The Pi sees it
+
+I picked AUDIO I/F on the R24 and checked from the Pi.
+
+```
+pi@rabbit:~ $ lsusb | grep -i zoom
+Bus 001 Device 002: ID 1686:00dd ZOOM Corporation R24
+
+pi@rabbit:~ $ aseqdump -l
+ Port    Client name                      Port name
+  0:0    System                           Timer
+  0:1    System                           Announce
+ 14:0    Midi Through                     Midi Through Port-0
+ 24:0    R24                              R24 MIDI 1
+```
+
+The last line is the important one. `R24 MIDI 1` is the port the faders talk through, and it showed up on its own. I didn't have to install drivers or set anything up, Linux just knew what it was. There were still no over-current errors either.
+
+Next was actually moving the faders and seeing what came out.
+
+## The faders work
+
+I ran `aseqdump -p "R24"`, which prints everything the R24 sends, and slid fader 1 from the bottom all the way up. This is part of what came out.
+
+```
+Source  Event                  Ch  Data
+ 24:0   Pitch bend              0, value -8192
+ 24:0   Pitch bend              0, value -8064
+ 24:0   Pitch bend              0, value -7936
+ ...
+ 24:0   Pitch bend              0, value 0
+ 24:0   Pitch bend              0, value 128
+ ...
+ 24:0   Pitch bend              0, value 8058
+ 24:0   Pitch bend              0, value 8191
+```
+
+Fader 1 is channel 0, the very bottom is -8192 and the very top is 8191. In between it climbs in really small steps, so it should feel smooth when it's dimming a light.
+
+The numbers are a little awkward to work with, so on the Pi side I just squish them into 0 to 1.
+
+```
+brightness = (value + 8192) / 16383
+```
+
+The bottom of the fader is 0 (off) and the top is 1 (full brightness).
+
+There were a few jumpy numbers at the start where it skipped around, but I think that was just me moving it too fast because the slow sweep was clean.
+
+## Testing everything else
+
+Then I went through the rest of the faders one by one and every one of them worked. Each fader gets its own channel and they all go the full -8192 to 8191. Faders 1 to 8 are channels 0 to 7, and the master fader is channel 8.
+
+Even fader 7, the one missing its cap, works fine. It just feels a little weird to push.
+
+The buttons show up too, but as notes instead of pitch bends. Every press sends a "note on" and every release sends a "note off".
+
+```
+ 24:0   Note on                 0, note 8, velocity 127
+ 24:0   Note off                0, note 8
+ 24:0   Note on                 0, note 9, velocity 127
+ 24:0   Note off                0, note 9
+```
+
+The buttons over each fader are notes 8 to 15, the transport buttons (play, stop, rec, that kind of stuff) are around 92 to 95 and the F1 to F5 keys are 54 to 58.
+
+So now I had 8 faders, a master and a bunch of buttons all talking to the Pi. My plan was for each fader to be one bulb, the master to turn everything up or down at once, the button over each fader to turn that bulb on or off, and the transport and F keys to be scenes like all off or full bright.
+
+The hardware part was basically done, and the next thing was getting the Pi to actually talk to the lights.
+
+## Okay but what else can it do
+
+Before writing any code, I wanted to figure out what I actually wanted this thing to control. I have 9 faders and a lot of buttons but only 3 bulbs right now (all Govee). I do have a 4th, I just haven't set it up yet.
+
+So I started brainstorming. The one thing I knew right away was that the master fader should be the overall brightness for the whole room.
+
+This was the rough layout I came up with, and none of it is final:
+
+- Faders 1 to 3: my three bulbs, one each
+- Fader 4: the fourth bulb once I set it up
+- Fader 5: color for all the bulbs
+- Fader 6: warm to cool white
+- Fader 7: room volume
+- Fader 8: free for now
+- Master: overall brightness
+- The button over each fader: that thing on or off
+- F1 to F5: scenes, like focus, movie, party, sleep and all off
+- Play, stop and skip: music
+- The big jog wheel: scroll through colors
+
+### The volume thing
+
+I also have a mixer and a sound system in my room with Alexa playing through it, and I wanted one fader to control the volume too.
+
+The problem is that Amazon doesn't really let you set Alexa's volume from your own code. There are some hacky ways to do it but from what I read they break a lot.
+
+Then I realized the R24 isn't just a controller, it's also an audio interface, and it's already plugged into the Pi. So instead of controlling Alexa, I could control the sound itself. Alexa plays into the R24, the sound goes through the Pi, the Pi turns it up or down based on the fader, and then it goes back out to the speakers. That way I don't need anything from Amazon.
+
+If the Pi can hear the music, that also opens up some more ideas.
+
+### Other ideas
+
+- Party mode, where the lights pulse along with whatever is playing
+- A sleep button that slowly fades the lights out over like 20 minutes
+- Jam recording. I play bass and guitar, so I could plug in, hit REC on the R24 and have it save the recording straight to the NAS in my rack
+- Having the play and skip buttons control Spotify
+- One fader just for my Mac's volume
+- Lights on the board. Maybe the buttons on the R24 could light up to show which bulbs are on (I have no idea if that works yet, I need to test it)
+
+I'm still figuring out which of these I actually want. I'll probably start with the bulbs and the volume and then add the rest after.
+
+## My room's sound setup
+
+The sound in my room runs through a Rockville RPM45BT, which is a mixer and an amp in one box. My two speakers plug straight into it and Alexa connects to it over Bluetooth.
+
+![The Rockville RPM45BT mixer on my shelf, showing Bluetooth Connected](/media/projects/mixer-lights/rockville.webp)
+
+So right now the sound goes:
+
+**Alexa → Bluetooth → Rockville → speakers**
+
+The plan was to put the Pi in the middle:
+
+**Alexa → Bluetooth → Pi → R24 → Rockville → speakers**
+
+Alexa can connect to any Bluetooth speaker, and the Pi has Bluetooth built in, so the Pi can pretend to be a speaker. Then it turns the sound up or down based on the fader and sends it out.
+
+One problem is that the Pi 5 doesn't have a headphone jack. But the R24 is also a sound card and it's already plugged into the Pi, so the sound can go out of the R24's outputs and into the Rockville's line in. That's one cable and I'm pretty sure I already have one.
+
+To make sure I don't blow out my speakers, I'll set the knob on the Rockville to the loudest I would ever want it and then never touch it again. The fader can only turn things down from there, so even if I push it all the way up it can't get crazy loud.
+
+I also thought about faking remote control button presses with an IR LED. I'm not even sure the Rockville takes a remote though, and even if it did, it would only be volume up and volume down instead of an actual level, so the fader would feel choppy.
+
+So I went with the Pi in the middle. I'm doing it in two parts so I can test as I go. First I get sound coming out of the Pi through the R24 and into the Rockville, and then I get Alexa connected to the Pi over Bluetooth.
+
+## The bulbs
+
+My bulbs are Govee Wi-Fi bulbs. A lot of Govee lights have a setting called LAN Control, which lets other things on your Wi-Fi talk to them directly with no cloud, no app and no delay. That would be perfect for a fader since you want the light to change the second you move it.
+
+The next thing was checking if mine actually have that setting.
+
+## Making it something other people can use
+
+Somewhere around here I realized this shouldn't just be a script that only works in my room. A lot of people have an old mixer or MIDI controller sitting around, and a lot of people have smart lights. So I wanted to turn it into an actual open source project, where you clone it, plug in your board, point it at your lights and run it.
+
+For now it only has to work with what I have, which is the Zoom R24, Govee bulbs and Alexa playing music. But I wanted it built in a way where someone else could add their own mixer or their own smart home stuff without having to rewrite everything.
+
+The way I thought about it, there are three pieces. The boards are whatever has the faders, so my R24, but also other mixers and MIDI controllers. The devices are whatever the faders control, which for now is my Govee bulbs and the room volume. And in the middle there's a simple config file that says things like "fader 1 is the desk lamp" or "master is brightness for everything."
+
+If you want to add a new board, you just teach it how your board talks, and if you want to add a new kind of light, you teach it how your light listens. Everything else stays the same.
+
+Before writing any code, I planned out the whole repo first: how it's organized, how setup works and how someone would add their own stuff.
+
+I wrote all of it up in an architecture doc so I could read through the whole thing before committing to it. The short version is that every board gets turned into the same simple events ("fader 3 is at 62%"), a config file says what each control does, and plugins handle talking to the actual lights or speakers. Setup should be six commands: install it, find the board, find the lights, move each fader to map it, run it and make it start on boot.
+
+The first version is just lights. Sound comes after that, and then support for other people's stuff through Home Assistant. The next step was picking a name and actually starting.
+
+## Naming it
+
+Naming it took longer than I thought it would. I wanted something weird enough that nobody else would have thought of it. I went through a bunch of audio words like roomtone, bleed, sidechain and ghostnote, but they were either already taken or too normal to search for. Sidechain is a crypto thing.
+
+I ended up on **decibulb**, which is decibel plus bulb. It worked because it says what it does, and when I searched it nothing came up with that name. It's also free on PyPI and npm, which matters if people are going to install it.
+
+## Step 1: the skeleton
+
+I built this one small step at a time and made sure each step actually worked on the Pi before moving on.
+
+The first step doesn't do anything useful on purpose. It's just the empty project with one command.
+
+```
+$ decibulb --version
+decibulb 0.0.1
+```
+
+That one command proves the whole setup works though. The project installs, Python finds the code and the `decibulb` command exists. Everything else gets built on top of that.
+
+## Step 2: reading the mixer
+
+Step 2 was getting decibulb to actually understand the R24.
+
+First I had to install the MIDI libraries on the Pi. My Pi runs Python 3.13, and one of them (`python-rtmidi`) doesn't come prebuilt for that yet, so it has to compile on the Pi, which needed the ALSA headers installed first. After that, Python could see the board.
+
+```
+['Midi Through:Midi Through Port-0 14:0', 'R24:R24 MIDI 1 24:0']
+```
+
+The main idea of this step is that every board gets turned into the same kind of event. The R24 sends stuff like `pitchwheel channel=0 pitch=6731`, which doesn't mean anything to anyone. decibulb turns that into `fader.1 = 0.91`. A cheap Korg controller would send totally different numbers, but it would still come out as `fader.1 = something`, so the lights code never has to care what mixer you have.
+
+The names come from a profile file for each board. It's just a list saying things like "channel 8 is the master fader" and "note 94 is play." If someone has a different board that speaks the same protocol, they can write their own profile without touching any code.
+
+### Finding every button
+
+Then I went through the whole board pressing everything and watching what came out. A few things surprised me.
+
+I thought the F keys were backwards, but they weren't. I was just pressing them from right to left.
+
+The jog wheel doesn't have a position because it spins forever, so instead it sends how far it moved. A 1 means one click clockwise and a 65 means one click the other way.
+
+The most confusing by far was the 8 buttons over the faders, which change depending on the mode. In REC mode they send one set of numbers, in SOLO another and in MUTE another, so it's really 24 buttons and not 8. I named them `rec.1`, `solo.1`, `mute.1` and so on, so later each mode could do something different.
+
+Pressing RHYTHM, then EFFECT, then USB also made the jog wheel send a "moved zero clicks" message. I have no idea why Zoom does that, but it's useless so decibulb just ignores it.
+
+### decibulb monitor
+
+All of that turned into the first real command. `decibulb monitor` shows everything the board does live.
+
+```
+Listening to Zoom R24 on R24:R24 MIDI 1 24:0. Press Ctrl+C to stop.
+fader.1    ████████████░░░░░░░░ 0.62
+master     ████████████████████ 1.00
+play       pressed
+play       released
+jog        → +1
+```
+
+I also wrote 32 tests using the real numbers I got from the board. That way if I (or someone else) break something later it gets caught right away, and you don't need an R24 to run them.
+
+## Step 3: talking to the bulbs
+
+Next was the other end, the lights.
+
+My bulbs are Govee H6008s. I was hoping to control them over Wi-Fi since Govee has a local network API for some of their lights, but there's no LAN Control setting for these in the app. My network does let devices see each other, so to be sure I had the Pi send out Govee's "who's there?" message and waited, and nothing answered. So I'm pretty sure these bulbs just don't support it.
+
+Govee also has a cloud API, but it only allows about 10 requests per bulb per minute. A fader sweep sends something like 20 updates a second, so that wasn't going to work.
+
+So I went with Bluetooth. The Pi has Bluetooth built in, and there's a library someone made for controlling Govee bulbs over Bluetooth. I scanned from the Pi and found my bulbs right away, and then I made each one blink one at a time so I could figure out which was which.
+
+Something weird was that the Govee app said my corner lamp was offline, but it showed up over Bluetooth and blinked fine. So it was only off Wi-Fi.
+
+I think Bluetooth is actually a better fit anyway. It's completely local, it doesn't care about the campus network and nothing goes through Govee's servers.
+
+### The bulb plugin
+
+Next I built the part of decibulb that actually talks to the bulbs.
+
+It works like the board side but flipped. Every board turns into the same events, and every device takes the same commands, like "set brightness to 0.62." So the code that hooks faders up to lights doesn't care if it's a Govee bulb over Bluetooth or some other light. If someone wants to add Philips Hue or anything else, they write one file and nothing else changes.
+
+Before writing the Govee part, I read through the Bluetooth library's code to see how it actually works, and I found two things. The first is that it drops the connection after 8 seconds of nothing happening, which would mean a delay every time I grabbed a fader after a break while it reconnected, so decibulb tells it to stay connected the whole time. The second is that Govee bulbs can't go to 0% brightness. The lowest is 1%, so the bottom of a fader is "as dim as it goes" and fully off is a separate command.
+
+Then I did the first real test. decibulb connected to my desk lamp, dimmed it, brightened it, turned it red and then warm white.
+
+I also ran a speed test where I sent brightness changes as fast as possible.
+
+```
+speed test: 51 brightness steps, as fast as possible
+10.1 updates per second
+```
+
+That's about 10 a second per bulb. A fader sends a lot more than that when you slide it, so decibulb can't just forward every message, or the bulb would fall behind and keep changing after you stopped moving. My plan was to only ever send the newest value. If you slide from 0 to 100 in half a second, the bulb doesn't need every step in between, it just needs to end up at 100.
+
+### Finding the bulbs
+
+Up to this point I had been finding my bulbs with little copy-pasted Python scripts. That was fine for me, but nobody cloning decibulb should have to do that, so I turned it into a command.
+
+```
+$ decibulb discover
+
+MODEL   ADDRESS             NAME                    SIGNAL
+H6008   ...                 ihoment_H6008_1F57      -52 dBm
+H6008   ...                 ihoment_H6008_70C7      -40 dBm
+H6008   ...                 ihoment_H6008_A93F      -51 dBm
+
+Found 3 lights.
+```
+
+The bulb names are just random codes, so there's no way to tell which one is the desk lamp. Adding `--blink` makes each bulb flash one at a time and you press Enter to go to the next one. It's the same trick I used to figure out mine, just built in now.
+
+The signal column is how strong each bulb's Bluetooth is, and closer to 0 is better. My desk lamp is right next to the rack so it's the strongest at -40, and the other two are around -52. All of them are a lot stronger than they need to be.
+
+I also tested what happens when Bluetooth is off, and the first version printed this mess.
+
+```
+decibulb: Bluetooth is unavailable: BLE scan failed: ('No powered Bluetooth adapters found. Turn on Bluetooth and try again.', <BleakBluetoothNotAvailableReason.POWERED_OFF: 3>)
+```
+
+The Bluetooth library wraps the real error inside its own error and pastes the whole thing into a string. I dug the original message back out, so now it just says this.
+
+```
+decibulb: Bluetooth is unavailable: No powered Bluetooth adapters found. Turn on Bluetooth and try again.
+```
+
+It's a small thing, but error messages are the first thing people see when something goes wrong, so I wanted them to actually make sense.
+
+### Wrapping up step 3
+
+The last part of step 3 was tests for the bulb side. The tricky part is that nobody running the tests has my bulbs, and GitHub's servers definitely don't. So the tests swap out the Bluetooth library for a fake one that just writes down what it was told to do. Then they check that decibulb sent the right things: 62% when the fader is at 0.62, the color temperature kept inside what the bulb can actually do, the connection staying open and so on.
+
+One test even rebuilds the exact messy Bluetooth error my Pi printed and checks that decibulb turns it into the clean version, word for word.
+
+I also fixed a small thing I noticed where after the last bulb blinked, it still said "Press Enter for the next light..." even though there wasn't one.
+
+That got it to 57 tests, all passing. decibulb could read every control on the mixer and control every bulb in my room. Next was the actual point of all this, hooking the two together.
+
+## Step 4: faders, meet lights
+
+This was the part I actually wanted, and it needed two new pieces.
+
+The first is a config file that says which bulb is which and what every control does. Fader 1 is the desk lamp, fader 2 is the corner lamp, master is brightness for everything and the solo buttons turn each lamp on and off. It lives on the Pi and never gets uploaded, so my bulbs' addresses stay off GitHub.
+
+The second is `decibulb run`, which connects to every bulb and then listens to the board and does whatever the config says.
+
+```
+$ decibulb run
+Connecting desk_lamp...
+Connecting corner_lamp...
+Connecting wardrobe_lamp...
+Ready: 3 of 3 devices connected. Press Ctrl+C to stop.
+```
+
+Then I moved fader 1 and the desk lamp followed it. That was the whole project working end to end for the first time.
+
+This is the color fader. With one fader, the whole room goes through the rainbow.
+
+<video src="/media/projects/mixer-lights/color-sweep.mp4" poster="/media/projects/mixer-lights/color-sweep-poster.webp" autoPlay muted loop playsInline preload="metadata" className="wu-narrow" aria-label="Sliding the color fader on the R24 while the lamps change color" />
+
+### Halfway didn't look like halfway
+
+The first thing I noticed was that the bottom half of the fader felt pointless. At halfway the lamp already looked basically bright, and all the actual dimming happened in a tiny spot at the very bottom.
+
+From what I read, this is because of how eyes work. You notice small changes in dim light a lot more than in bright light, so 50% power doesn't look half as bright. Real dimmers deal with this by using a curve instead of a straight line. decibulb squares the fader position now, so halfway on the fader is 25% power, which actually looks about halfway, and that fixed it. If you want the old straight-line version, there's a setting for it.
+
+It's still not perfectly smooth on really slow moves. The bulbs only have 100 brightness levels, so if you move the fader really slowly you can see it step. That's the bulb though, and there isn't anything I can do about it.
+
+## The lag
+
+Everything worked, but the faders felt laggy. If I moved one fast, the lamp would keep sliding for a second or two after I stopped. Color temperature was the worst. One time I let go and it was still changing seconds later.
+
+This turned into the longest part of the whole project so far.
+
+### Trying to make Bluetooth faster
+
+My first guess was Bluetooth. The bulb was taking about 100 ms per command, so I tried to make the Pi talk to it faster. There's a setting for how often the Pi and the bulb check in with each other, and I turned it way down. It took a reboot to actually apply, and even then it didn't help.
+
+Then I tried skipping the part where decibulb waits for the bulb to say "got it" before sending the next thing, and the bulb just disconnected. So it really couldn't take commands any faster.
+
+### Faking the mixer
+
+I wanted to catch the lag in a log, but I wasn't always at the board. So I wrote a small script that pretends to be the mixer. It moves the faders the same way I would, waits 5 minutes doing nothing and then moves them again, all through the real code and the real bulbs.
+
+The log came back clean. Every command took about 45 ms, with no dropped connections during the 5 minutes and no stuck commands. So whatever was causing the lag, it wasn't Bluetooth falling apart.
+
+It did catch something else though. Two of my lamps were off the whole time and decibulb had no idea, because it just assumed every lamp was on when it started. So it was sending brightness changes to lamps that couldn't show them.
+
+### What it actually was
+
+The bulb says "got it" in about 45 ms, but then it fades to the new value, and the fade takes longer than that. So if you send commands faster than it can fade, it starts lining them up and plays them one after another, and that was the lag. decibulb was only sending the newest value like it was supposed to, but it was sending it too often, so the bulb built up its own backlog.
+
+The weird part is that my Bluetooth change actually made it worse. It didn't help the bulb, but it made commands go out twice as fast as before, so the backlog built up faster.
+
+The fix was to make decibulb wait between commands to each bulb and keep grabbing the newest fader value while it waits. At 0.1 seconds, fast moves were perfect but slow moves still lagged, because a slow move keeps sending for longer and the line keeps growing. I tried a few numbers and 0.3 seconds felt right.
+
+So the bulbs can only really show about 3 changes a second, but it still feels smooth because each one fades into the next.
+
+<div className="wu-grid wu-grid-3">
+  <figure>
+    <img src="/media/projects/mixer-lights/room-red.webp" alt="My desk and rack with the wall lit red" />
+  </figure>
+  <figure>
+    <img src="/media/projects/mixer-lights/room-green.webp" alt="The same desk with the wall lit green" />
+  </figure>
+  <figure>
+    <img src="/media/projects/mixer-lights/room-pink.webp" alt="The same desk with the wall lit pink" />
+  </figure>
+</div>
+
+*Same fader, three different spots.*
+
+## The board disappeared
+
+A few days later I went to use it and decibulb couldn't find the R24 at all. `lsusb` didn't list it, and the Pi's log had this in it.
+
+```
+hwmon hwmon3: Undervoltage detected!
+```
+
+The Pi dipped in power for a couple of seconds right when the R24 was trying to start, so the R24 never finished turning on. The `usb_max_current_enable` line was still there, but this Pi is also running a bunch of Docker containers now, so there's less power left over for the R24 than when I first got it working. It was the power again.
+
+I fixed it by switching the Pi off PoE and onto a full power cable. That gives the Pi more power to work with, so it has enough left over for the R24 too. The undervoltage warnings went away and the R24 showed up again.
+
+I also wrote this up in the README, with the options from best to worst: the board's own adapter, a powered USB hub, batteries, and last, the Pi's USB port. A setup that works one week can stop working the next just because you added something else to the Pi.
+
+## Making it reliable
+
+At this point decibulb worked, but only if everything was perfect when I started it, so I fixed the things that could go wrong.
+
+Right after connecting, it now asks every bulb whether it's on. If a lamp is off, moving its fader turns it on first, the master fader skips it and the on/off button works on the first press.
+
+It also skips commands that don't change anything. The bulbs round everything, and brightness only goes in whole percents, so 50.1% and 50.4% look exactly the same. Since every command uses up 0.3 seconds now, sending one that doesn't change anything just makes the next real change wait. So decibulb works out what the bulb would actually show, and if the bulb is already showing that, it doesn't send it.
+
+Before, if the R24 was off when decibulb started, it would just quit. And if I turned the R24 off while it was running, decibulb would sit there forever, because a board that turns off doesn't send an error, it just goes quiet. Now it waits for the board to show up, notices when it disappears and picks it back up when it comes back.
+
+If a lamp is off at the wall when decibulb starts, it tries again every 30 seconds, and once the lamp shows up its fader just starts working. I didn't make it faster than 30 seconds because searching for a lamp uses the same Bluetooth radio the other lamps are using.
+
+All of that was needed for the last piece, which was running it on boot. decibulb is set up as a service now, so it starts when the Pi turns on and restarts itself if anything crashes, and I don't have to SSH in to start it.
+
+### Lamps that drop out
+
+A couple of days later the board stopped doing anything, and the log was full of this, over and over.
+
+```
+desk_lamp: connect failed: ... device not found: The device disappeared
+```
+
+The board was fine. Two of the lamps had dropped off Bluetooth while decibulb was running, and decibulb kept sending every fader move to the dead connection. The Bluetooth library tries to reconnect on every command, but it never searches for the bulb again first, and once Linux forgets a bulb, nothing can reconnect to it without a new search.
+
+The startup retry already did that search, it just only ran for lamps that were missing when decibulb started. So now if a lamp fails twice in a row, decibulb gives up on that connection and hands the lamp to the same retry. It searches every 30 seconds until the lamp shows back up, and the lamp even keeps the fader level it had before it dropped.
+
+## v0.1.0
+
+After that I cleaned it up so other people can actually use it.
+
+Every push to GitHub now runs all 137 tests on a fresh machine on three versions of Python, so if I break something I find out right away. None of the tests need the real mixer or bulbs, which is what makes that possible.
+
+I also wrote a proper README that covers how to set it up, what each part does and everything I learned about the R24 and the bulbs the hard way, like the power problems and why it only sends 3 changes a second. It also says you don't need a Pi, since any Linux computer with Bluetooth works.
+
+And it's tagged as v0.1.0 on GitHub under the MIT license. It's up at [github.com/agulam-coco/decibulb](https://github.com/agulam-coco/decibulb).
+
+Next is the room volume, where Alexa plays through the Pi, out of the R24 and into the Rockville, and one fader sets how loud it is.

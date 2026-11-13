@@ -28,8 +28,8 @@ Because every board turns into the same events, you can swap mixers or lights wi
 
 | Type | Hardware | Status |
 |---|---|---|
-| Board | Zoom R24 (Mackie Control) | ✅ All 9 faders, every button, jog wheel |
-| Lights | Govee H6008 (Bluetooth) | ✅ Power, brightness, color, color temperature |
+| Board | Zoom R24 (Mackie Control) | All 9 faders, every button, jog wheel |
+| Lights | Govee H6008 (Bluetooth) | Power, brightness, color, color temperature |
 
 ## Requirements
 

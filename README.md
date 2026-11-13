@@ -4,7 +4,7 @@
 
 Turn an old mixer into a light switch.
 
-<img src="docs/demo.webp" alt="Sliding a fader on a Zoom R24 while the room's lights change color" width="320">
+VIDEO-GOES-HERE
 
 Plug a mixer or MIDI controller into a Raspberry Pi (or any Linux computer), and its faders control your lights, your speakers, and eventually anything else in your smart home.
 
@@ -288,8 +288,6 @@ python scripts/lag_test.py -vv 2>&1 | tee lag.log
 decibulb/
 ├── .github/workflows/
 │   └── tests.yml               runs pytest on every push
-├── docs/
-│   └── demo.webp               the demo at the top of this README
 ├── pyproject.toml              install settings, dependencies, the decibulb command
 ├── config.example.yaml         starting point for your config.yaml
 ├── README.md
